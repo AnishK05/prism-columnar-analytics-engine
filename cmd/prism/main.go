@@ -174,43 +174,9 @@ func cmdDescribe(args []string) error {
 	}
 	minTS, maxTS, hasTS := tbl.TimestampRangeMS("ts")
 	if *asJSON {
-		type fieldJSON struct {
-			Name string `json:"name"`
-			Type string `json:"type"`
-		}
-		out := struct {
-			Table           string      `json:"table"`
-			Dir             string      `json:"dir"`
-			Files           int         `json:"files"`
-			Rows            int64       `json:"rows"`
-			RowGroups       int         `json:"row_groups"`
-			CompressedBytes int64       `json:"compressed_bytes"`
-			MinTSMs         *int64      `json:"min_ts_ms,omitempty"`
-			MaxTSMs         *int64      `json:"max_ts_ms,omitempty"`
-			TSClustering    string      `json:"ts_clustering,omitempty"`
-			Schema          []fieldJSON `json:"schema"`
-		}{
-			Table:           tbl.Name,
-			Dir:             tbl.Dir,
-			Files:           len(tbl.Files),
-			Rows:            tbl.NumRows,
-			RowGroups:       tbl.NumRowGroups,
-			CompressedBytes: tbl.CompressedBytes,
-		}
-		for _, f := range tbl.Fields {
-			out.Schema = append(out.Schema, fieldJSON{Name: f.Name, Type: f.Type})
-		}
-		if hasTS {
-			out.MinTSMs = &minTS
-			out.MaxTSMs = &maxTS
-		}
-		if _, ok := tbl.FieldType("ts"); ok {
-			_, detail := tbl.Clustering("ts")
-			out.TSClustering = detail
-		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(out)
+		return enc.Encode(tbl.Info())
 	}
 	fmt.Printf("table: %s\n", tbl.Name)
 	fmt.Printf("dir: %s\n", tbl.Dir)

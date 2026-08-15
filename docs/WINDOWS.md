@@ -4,7 +4,7 @@ This is the **canonical local setup** for Prism. The engine is meant to be devel
 
 Native PowerShell + Docker Desktop is first-class. WSL2 is optional.
 
-> **Status (Phase 0–11):** CLI through `sql` / `explain` / `bench` works. Dual engine, `--jobs`, Postgres oracle scripts, and the hot-cache bench harness are on. The Next.js workbench is not built yet. Resume timings stay placeholders until you run `--scale laptop` on this machine.
+> **Status (Phase 0–12):** CLI through `sql` / `explain` / `bench` works, and `prismd` serves `/health` `/tables` `/query` on `http://127.0.0.1:8080`. Dual engine, `--jobs`, Postgres oracle, and the hot-cache bench harness are on. The Next.js workbench is Phase 13. Resume timings stay placeholders until you run `--scale laptop` on this machine.
 
 ---
 
@@ -95,6 +95,7 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 .\scripts\windows\prism.ps1 data-tiny
 .\scripts\windows\prism.ps1 verify
 .\scripts\windows\prism.ps1 bench-dev
+.\scripts\windows\prism.ps1 engine
 ```
 
 The `.ps1` file wraps the commands below. Raw `go` / `py` is the source of truth.
@@ -193,11 +194,34 @@ go run .\cmd\prism -- bench --scale dev --engine all --repeat 5 --out .\bench\re
 
 Hot cache only on Windows (no `drop_caches`). Warmup discarded; first-run and hot median/p95 are reported separately. The 3-way breakdown is row-naive / row-opt / vectorized.
 
+### 7. HTTP API (`prismd`)
+
+Native engine (not Docker) while iterating. Default listen is loopback so Windows does not prompt for a public firewall exception.
+
+```powershell
+go run .\cmd\prismd -- --listen 127.0.0.1:8080 --data-dir testdata\tables
+# or: .\scripts\windows\prism.ps1 engine
+```
+
+In a second PowerShell:
+
+```powershell
+curl.exe http://127.0.0.1:8080/health
+curl.exe http://127.0.0.1:8080/tables
+curl.exe http://127.0.0.1:8080/tables/events
+$body = '{"sql":"SELECT country, COUNT(*) FROM events GROUP BY country ORDER BY COUNT(*) DESC LIMIT 5","engine":"vectorized","explain":true}'
+curl.exe -s -X POST http://127.0.0.1:8080/query -H "Content-Type: application/json" -d $body
+Invoke-RestMethod -Method POST -Uri http://127.0.0.1:8080/query -ContentType application/json -Body $body
+```
+
+Contract: [`docs/api.md`](api.md). CORS is `*` so the Phase 13 workbench on `:3000` can call this process. Query timeout defaults to 60s. Scan queries without `LIMIT` are capped at 100 rows (`truncated: true`); aggregates are capped at 100k.
+
+`GET /bench` returns `bench/results/sample.json` (UI format). Live benches stay on `prism bench`.
+
 ### Not in this phase
 
 | Command | When |
 |---|---|
-| `prismd` HTTP API | Phase 12 |
 | Next.js workbench | Phase 13 |
 
 ---
