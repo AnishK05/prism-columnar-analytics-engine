@@ -39,7 +39,7 @@ func readSQL(t *testing.T, name string) string {
 
 func TestQ1toQ8EnginesMatch(t *testing.T) {
 	dir := testdataTables(t)
-	files := []string{"q1.sql", "q2.sql", "q3.sql", "q4.sql", "q5.sql", "q6.sql", "q7.sql", "q8.sql"}
+	files := []string{"q1.sql", "q2.sql", "q3.sql", "q4.sql", "q5.sql", "q6.sql", "q7.sql", "q8.sql", "q8_wide.sql"}
 	ctx := context.Background()
 	for _, name := range files {
 		src := readSQL(t, name)

@@ -6,10 +6,12 @@
   .\scripts\windows\prism.ps1 setup
   .\scripts\windows\prism.ps1 data-tiny
   .\scripts\windows\prism.ps1 test
+  .\scripts\windows\prism.ps1 verify
+  .\scripts\windows\prism.ps1 bench-dev
 #>
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("setup", "data-tiny", "data-dev", "test", "engine", "web", "verify", "bench-dev", "help")]
+    [ValidateSet("setup", "data-tiny", "data-dev", "data-laptop", "test", "engine", "web", "verify", "bench-dev", "help")]
     [string]$Command = "help"
 )
 
@@ -44,18 +46,37 @@ function Invoke-Go {
     }
 }
 
+function Wait-Postgres {
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+        throw "docker not found. Postgres oracle needs Docker Desktop."
+    }
+    docker compose up -d postgres
+    if ($LASTEXITCODE -ne 0) {
+        throw "docker compose up failed"
+    }
+    for ($i = 0; $i -lt 30; $i++) {
+        docker compose exec -T postgres pg_isready -U postgres -d prism_oracle | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+        Start-Sleep -Seconds 2
+    }
+    throw "postgres did not become ready (docker compose ps)"
+}
+
 switch ($Command) {
     "help" {
         Write-Host @"
 prism.ps1 commands:
-  setup       Check tools and install Python deps
-  data-tiny   Generate 100K-row events table
-  data-dev    Generate 1M-row events table
-  test        go test ./...
-  engine      Phase 12 (prints version for now)
-  web         Phase 13 (not implemented)
-  verify      Phase 10 (starts with docker compose postgres hint)
-  bench-dev   Phase 11 (not implemented)
+  setup        Check tools and install Python deps
+  data-tiny    Generate 100K-row events table
+  data-dev     Generate 1M-row events table
+  data-laptop  Generate 10M-row events table (stop before the machine swaps)
+  test         go test ./...
+  engine       Phase 12 (prints version for now)
+  web          Phase 13 (not implemented)
+  verify       Postgres oracle: testdata + tiny (compose up, load, compare Q1-Q8)
+  bench-dev    prism bench --scale=dev --engine=all --repeat=5
 "@
     }
     "setup" {
@@ -66,7 +87,7 @@ prism.ps1 commands:
             docker compose version
         }
         else {
-            Write-Warning "docker not found; Postgres oracle (Phase 10) needs Docker Desktop."
+            Write-Warning "docker not found; Postgres oracle (verify) needs Docker Desktop."
         }
         Write-Host "setup ok"
     }
@@ -75,6 +96,9 @@ prism.ps1 commands:
     }
     "data-dev" {
         Invoke-Py (Join-Path $RepoRoot "scripts\generate_data.py") --scale dev
+    }
+    "data-laptop" {
+        Invoke-Py (Join-Path $RepoRoot "scripts\generate_data.py") --scale laptop
     }
     "test" {
         Invoke-Go test ./...
@@ -88,10 +112,32 @@ prism.ps1 commands:
         Write-Host "Next.js workbench is Phase 13. Skip for now."
     }
     "verify" {
-        Write-Host "Postgres oracle is Phase 10."
-        Write-Host "When you need it: docker compose up -d postgres"
+        Wait-Postgres
+        Invoke-Py (Join-Path $RepoRoot "scripts\verify_manifest.py") --data-dir testdata\tables
+        Invoke-Py (Join-Path $RepoRoot "scripts\load_postgres.py") --scale testdata
+        Invoke-Py (Join-Path $RepoRoot "scripts\verify_against_postgres.py") --scale testdata
+        $events = Join-Path $RepoRoot "data\tables\events"
+        if (-not (Test-Path $events)) {
+            Invoke-Py (Join-Path $RepoRoot "scripts\generate_data.py") --scale tiny
+        }
+        Invoke-Py (Join-Path $RepoRoot "scripts\verify_manifest.py") --data-dir data\tables
+        Invoke-Py (Join-Path $RepoRoot "scripts\load_postgres.py") --scale tiny
+        Invoke-Py (Join-Path $RepoRoot "scripts\verify_against_postgres.py") --scale tiny
+        $man = Join-Path $RepoRoot "data\tables\manifest.json"
+        if (Test-Path $man) {
+            $scale = (Get-Content $man -Raw | ConvertFrom-Json).scale
+            if ($scale -eq "dev") {
+                Invoke-Py (Join-Path $RepoRoot "scripts\load_postgres.py") --scale dev
+                Invoke-Py (Join-Path $RepoRoot "scripts\verify_against_postgres.py") --scale dev
+            }
+        }
+        Write-Host "verify ok"
     }
     "bench-dev" {
-        Write-Host "Benchmark harness is Phase 11."
+        $events = Join-Path $RepoRoot "data\tables\events"
+        if (-not (Test-Path $events)) {
+            Invoke-Py (Join-Path $RepoRoot "scripts\generate_data.py") --scale dev
+        }
+        Invoke-Go run ./cmd/prism -- bench --scale dev --engine all --repeat 5 --out bench\results\dev.json
     }
 }

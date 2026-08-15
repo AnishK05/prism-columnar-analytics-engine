@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -9,7 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
+	"github.com/AnishK05/prism-columnar-analytics-engine/internal/bench"
 	"github.com/AnishK05/prism-columnar-analytics-engine/internal/catalog"
 	"github.com/AnishK05/prism-columnar-analytics-engine/internal/engine"
 	"github.com/AnishK05/prism-columnar-analytics-engine/internal/expr"
@@ -55,6 +58,8 @@ func run(args []string) error {
 		return cmdSQL(args[1:])
 	case "explain":
 		return cmdExplain(args[1:])
+	case "bench":
+		return cmdBench(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], helpText)
 	}
@@ -74,6 +79,7 @@ Commands:
   agg        Hash aggregate (flag-based GROUP BY)
   sql        Parse/bind/run a Prism SQL SELECT
   explain    Print the physical plan (optional --analyze / --json)
+  bench      Run PrismBench Q1–Q8 (hot-cache protocol)
   help       Show this message
 
 Examples:
@@ -87,6 +93,7 @@ Examples:
   go run ./cmd/prism sql --data-dir testdata/tables "SELECT country, COUNT(*) FROM events GROUP BY country ORDER BY COUNT(*) DESC LIMIT 5"
   go run ./cmd/prism sql --engine=row --jobs=1 --data-dir testdata/tables "SELECT COUNT(*) FROM events"
   go run ./cmd/prism explain --data-dir testdata/tables --file testdata/sql/ok/q2.sql
+  go run ./cmd/prism bench --scale testdata --repeat 3
 `
 
 func printHelp(w io.Writer) {
@@ -146,6 +153,7 @@ func cmdDescribe(args []string) error {
 	fs.SetOutput(os.Stderr)
 	dataDir := fs.String("data-dir", "", "tables root (default PRISM_DATA_DIR or ./data/tables)")
 	tableFlag := fs.String("table", "", "table name")
+	asJSON := fs.Bool("json", false, "JSON summary (rows, files, ts range)")
 	if err := fs.Parse(flagsFirst(args)); err != nil {
 		return err
 	}
@@ -164,6 +172,46 @@ func cmdDescribe(args []string) error {
 	if err != nil {
 		return err
 	}
+	minTS, maxTS, hasTS := tbl.TimestampRangeMS("ts")
+	if *asJSON {
+		type fieldJSON struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+		}
+		out := struct {
+			Table           string      `json:"table"`
+			Dir             string      `json:"dir"`
+			Files           int         `json:"files"`
+			Rows            int64       `json:"rows"`
+			RowGroups       int         `json:"row_groups"`
+			CompressedBytes int64       `json:"compressed_bytes"`
+			MinTSMs         *int64      `json:"min_ts_ms,omitempty"`
+			MaxTSMs         *int64      `json:"max_ts_ms,omitempty"`
+			TSClustering    string      `json:"ts_clustering,omitempty"`
+			Schema          []fieldJSON `json:"schema"`
+		}{
+			Table:           tbl.Name,
+			Dir:             tbl.Dir,
+			Files:           len(tbl.Files),
+			Rows:            tbl.NumRows,
+			RowGroups:       tbl.NumRowGroups,
+			CompressedBytes: tbl.CompressedBytes,
+		}
+		for _, f := range tbl.Fields {
+			out.Schema = append(out.Schema, fieldJSON{Name: f.Name, Type: f.Type})
+		}
+		if hasTS {
+			out.MinTSMs = &minTS
+			out.MaxTSMs = &maxTS
+		}
+		if _, ok := tbl.FieldType("ts"); ok {
+			_, detail := tbl.Clustering("ts")
+			out.TSClustering = detail
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(out)
+	}
 	fmt.Printf("table: %s\n", tbl.Name)
 	fmt.Printf("dir: %s\n", tbl.Dir)
 	fmt.Printf("files: %d  rows: %d  row_groups: %d  compressed: %s\n",
@@ -179,6 +227,12 @@ func cmdDescribe(args []string) error {
 		} else {
 			fmt.Printf("ts clustering: not clustered (%s)\n", detail)
 		}
+	}
+	if hasTS {
+		fmt.Printf("ts range: %d .. %d (%s .. %s)\n",
+			minTS, maxTS,
+			time.UnixMilli(minTS).UTC().Format(time.RFC3339),
+			time.UnixMilli(maxTS).UTC().Format(time.RFC3339))
 	}
 	fmt.Printf("row groups:\n")
 	for i, rg := range tbl.RowGroups {
@@ -515,6 +569,7 @@ func cmdSQL(args []string) error {
 	doExplain := fs.Bool("explain", false, "print the physical plan instead of rows")
 	analyze := fs.Bool("analyze", false, "run the query and include scan stats in EXPLAIN")
 	asJSON := fs.Bool("json", false, "result JSON (or EXPLAIN JSON with --explain)")
+	jsonLimit := fs.Int64("json-limit", 1000, "max rows in --json output (0 = all)")
 	eng := fs.String("engine", "vectorized", "vectorized|row")
 	jobs := fs.Int("jobs", 0, "parallel workers (0 = PRISM_PARALLELISM or GOMAXPROCS)")
 	noSkip := fs.Bool("no-skip", false, "disable row-group skipping (naive baseline)")
@@ -594,7 +649,7 @@ func cmdSQL(args []string) error {
 		return printExplain(res.Node, *asJSON)
 	}
 	if *asJSON {
-		b, err := res.JSON()
+		b, err := res.JSONCap(*jsonLimit)
 		if err != nil {
 			return err
 		}
@@ -676,6 +731,10 @@ func cmdExplain(args []string) error {
 	}
 	res.Record.Release()
 	return printExplain(res.Node, *asJSON)
+}
+
+func cmdBench(args []string) error {
+	return bench.Main(args)
 }
 
 func printExplain(node *plan.Node, asJSON bool) error {

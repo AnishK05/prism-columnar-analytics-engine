@@ -1,0 +1,67 @@
+{
+  "queries": [
+    {
+      "id": "Q1",
+      "file": "testdata/sql/ok/q1.sql",
+      "ordered": false,
+      "oracle": true,
+      "showcase": "scan-prune"
+    },
+    {
+      "id": "Q2",
+      "file": "testdata/sql/ok/q2.sql",
+      "ordered": false,
+      "oracle": true,
+      "showcase": "time-skip"
+    },
+    {
+      "id": "Q3",
+      "file": "testdata/sql/ok/q3.sql",
+      "ordered": false,
+      "oracle": true,
+      "showcase": "filter"
+    },
+    {
+      "id": "Q4",
+      "file": "testdata/sql/ok/q4.sql",
+      "ordered": true,
+      "oracle": true,
+      "showcase": "groupby-lowcard"
+    },
+    {
+      "id": "Q5",
+      "file": "testdata/sql/ok/q5.sql",
+      "ordered": true,
+      "oracle": true,
+      "showcase": "groupby-highcard"
+    },
+    {
+      "id": "Q6",
+      "file": "testdata/sql/ok/q6.sql",
+      "ordered": true,
+      "oracle": true,
+      "showcase": "resume"
+    },
+    {
+      "id": "Q7",
+      "file": "testdata/sql/ok/q7.sql",
+      "ordered": false,
+      "oracle": true,
+      "showcase": "string-in"
+    },
+    {
+      "id": "Q8",
+      "file": "testdata/sql/ok/q8.sql",
+      "ordered": true,
+      "oracle": true,
+      "showcase": "prune-narrow"
+    },
+    {
+      "id": "Q8-wide",
+      "file": "testdata/sql/ok/q8_wide.sql",
+      "ordered": true,
+      "oracle": true,
+      "showcase": "prune-wide"
+    }
+  ]
+}

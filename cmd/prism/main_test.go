@@ -38,6 +38,9 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(buf.String(), "explain") {
 		t.Fatal("help should mention explain")
 	}
+	if !strings.Contains(buf.String(), "bench") {
+		t.Fatal("help should mention bench")
+	}
 }
 
 func TestFlagsFirst(t *testing.T) {
@@ -67,6 +70,27 @@ func TestDescribeTestdata(t *testing.T) {
 	}
 	if err := run([]string{"tables", "--data-dir", dir}); err != nil {
 		t.Fatal(err)
+	}
+
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	runErr := run([]string{"describe", "events", "--json", "--data-dir", dir})
+	w.Close()
+	os.Stdout = old
+	out, _ := io.ReadAll(r)
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	s := string(out)
+	if !strings.Contains(s, `"rows": 8192`) {
+		t.Fatalf("describe json rows:\n%s", s)
+	}
+	if !strings.Contains(s, `"min_ts_ms": 1704067200000`) || !strings.Contains(s, `"max_ts_ms": 1735603199000`) {
+		t.Fatalf("describe json ts:\n%s", s)
 	}
 }
 
@@ -219,5 +243,18 @@ func TestSQLEngineRowAndJSON(t *testing.T) {
 	}
 	if !strings.Contains(string(out), `"engine": "vectorized"`) || !strings.Contains(string(out), "8192") {
 		t.Fatalf("json:\n%s", out)
+	}
+
+	rOut, wOut, _ = os.Pipe()
+	os.Stdout, os.Stderr = wOut, oldErr
+	runErr = run([]string{"bench", "--scale", "testdata", "--data-dir", dir, "--engine", "vectorized", "--repeat", "1", "--breakdown=false"})
+	wOut.Close()
+	os.Stdout = oldOut
+	out, _ = io.ReadAll(rOut)
+	if runErr != nil {
+		t.Fatalf("bench: %v\n%s", runErr, out)
+	}
+	if !strings.Contains(string(out), "Q1") || !strings.Contains(string(out), "vectorized") {
+		t.Fatalf("bench table:\n%s", out)
 	}
 }

@@ -524,7 +524,7 @@ Keep `internal/` strict: the CLI and HTTP are thin. This is what you walk throug
 
 Each phase has a **learning goal**, **deliverable**, **tests**, and a **done when**. Do not start Phase N+1 until Phase N is demoable. Timeboxes are effort, not calendar promises — skip them if they get in the way, keep the sequence.
 
-**Progress:** Phase 0–9 are implemented (`tables`/`describe`, `--where`, `agg`, `sql`, `explain`, skip, dual engine, `--jobs`).
+**Progress:** Phase 0–11 are implemented (`tables`/`describe`, `--where`, `agg`, `sql`, `explain`, skip, dual engine, `--jobs`, Postgres oracle scripts, `prism bench`). Laptop-scale generation and resume timings are still measured on the Windows machine — do not invent them.
 
 ---
 
@@ -705,7 +705,7 @@ Each phase has a **learning goal**, **deliverable**, **tests**, and a **done whe
 - `verify_against_postgres.py`: run each Q1–Q8, compare with type-aware equality (sort if no ORDER BY; floats via exact AVG-from-sums or rounded).
 - Generator should also emit a `manifest.json`: row counts, checksum of `sum(event_id)`, min/max ts — engine `describe` should match.
 
-**Done when:** `.\scripts\windows\prism.ps1 verify` (or the documented `py` commands) passes on `tiny` and `dev`. `laptop` scale generation completes on this Windows machine without swapping, and `prism describe events` shows the row count you will actually put on the resume (10M, 50M, 100M — whatever fit).
+**Done when:** `.\scripts\windows\prism.ps1 verify` (or the documented `py` commands) passes on `tiny` and `dev`. `laptop` scale generation completes on this Windows machine without swapping, and `prism describe events` shows the row count you will actually put on the resume (10M, 50M, 100M — whatever fit). **Shipped in Phase 10** (batched generator + tqdm + `manifest.json`; `load_postgres.py` / `verify_against_postgres.py` / `verify_manifest.py`; `prism.ps1 verify`). Laptop row count remains a Windows-machine measurement.
 
 ---
 
@@ -725,7 +725,7 @@ Each phase has a **learning goal**, **deliverable**, **tests**, and a **done whe
 - Breakdown experiment from §9.2.
 - **Do not put a number on the resume until this phase has been run at `laptop` scale.** If you get 4×, the resume says 4×. If you get 30× on Q2 and 6× on Q4, say “up to 30× on selective scans, ~6–10× on group-by” or pick one query and name it. The placeholder 100M/10x is discarded, not stretched.
 
-**Done when:** you have a table you would show in an interview, and the UI can load a checked-in `bench/results/sample.json`.
+**Done when:** you have a table you would show in an interview, and the UI can load a checked-in `bench/results/sample.json`. **Shipped in Phase 11** (`prism bench` / `go run ./bench`, 3-way breakdown, hot-cache protocol, `docs/benchmarks.md`, testdata `sample.json`). **Do not put a number on the resume until `laptop` is measured on Windows.**
 
 ---
 

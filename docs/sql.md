@@ -47,6 +47,7 @@ go run .\cmd\prism -- sql --ast "SELECT * FROM events WHERE country = 'US' LIMIT
 go run .\cmd\prism -- explain --data-dir testdata\tables --file testdata\sql\ok\q2.sql
 go run .\cmd\prism -- sql --engine=row --jobs=1 --data-dir testdata\tables --file testdata\sql\ok\q1.sql
 go run .\cmd\prism -- sql --jobs=4 --json --data-dir testdata\tables --file testdata\sql\ok\q1.sql
+go run .\cmd\prism -- bench --scale testdata --repeat 3
 ```
 
 `--engine=vectorized` (default) uses Arrow batch kernels. `--engine=row` decodes the same pruned/skipped scan into a per-row loop (the speedup baseline). `--jobs` / `PRISM_PARALLELISM` runs a worker pool over row groups with partial + merge aggregation. Without `ORDER BY`, row order is undefined — compare results as multisets.

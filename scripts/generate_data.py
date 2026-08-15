@@ -12,6 +12,24 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover - tqdm is in scripts/requirements.txt
+    def tqdm(iterable=None, **kwargs):  # type: ignore[misc]
+        if iterable is None:
+            class _Dummy:
+                def update(self, n: int = 1) -> None:
+                    return None
+
+                def close(self) -> None:
+                    return None
+
+                def set_postfix(self, **kwargs) -> None:
+                    return None
+
+            return _Dummy()
+        return iterable
+
 EVENT_TYPES = np.array(["view", "click", "add_cart", "purchase", "refund"])
 EVENT_TYPE_P = np.array([0.60, 0.20, 0.10, 0.08, 0.02])
 COUNTRIES = np.array(
@@ -190,6 +208,7 @@ def write_events(
     event_id = 1
     part = 0
     dest = out_dir / "events"
+    pbar = tqdm(total=n, unit="row", unit_scale=True, desc="events")
 
     while event_id <= n:
         file_rows = min(rows_per_file, n - event_id + 1)
@@ -233,12 +252,15 @@ def write_events(
                 _write_table(writer, table, row_group)
                 sum_event_id += int(ids.sum())
                 written += b
+                pbar.update(b)
+                pbar.set_postfix(file=path.name)
         finally:
             writer.close()
         files.append(str(path.relative_to(out_dir)))
         print(f"wrote {path} ({file_rows} rows)", flush=True)
         event_id += file_rows
         part += 1
+    pbar.close()
 
     return {
         "rows": n,
@@ -288,7 +310,12 @@ def main() -> int:
         help="tables root (default ./data/tables)",
     )
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--rows", type=int, default=None, help="override events row count")
+    p.add_argument(
+        "--rows",
+        type=int,
+        default=None,
+        help="override events row count (laptop ladder: 10M then 25M / 50M / 100M)",
+    )
     args = p.parse_args()
     generate(args.out, args.scale, args.seed, args.rows)
     return 0
