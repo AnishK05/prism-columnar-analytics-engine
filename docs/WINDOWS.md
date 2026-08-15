@@ -4,7 +4,7 @@ This is the **canonical local setup** for Prism. The engine is meant to be devel
 
 Native PowerShell + Docker Desktop is first-class. WSL2 is optional.
 
-> **Status (Phase 0–3):** CLI `version` / `tables` / `describe` / `inspect` / `scan` work, including vectorized `--where` filters. SQL, aggregations, and the Next.js workbench are not built yet.
+> **Status (Phase 0–5):** CLI `version` / `tables` / `describe` / `inspect` / `scan` / `agg` / `sql` work. EXPLAIN, row-group skipping, and the Next.js workbench are not built yet.
 
 ---
 
@@ -121,9 +121,14 @@ go run .\cmd\prism -- inspect --data-dir testdata\tables --table events
 go run .\cmd\prism -- scan --data-dir testdata\tables --table events --columns country,amount_cents --limit 5
 go run .\cmd\prism -- scan --data-dir testdata\tables --table events --where "amount_cents > 0 AND country = 'US'" --columns country,amount_cents --limit 10
 py -3 .\scripts\filter_oracle.py --data-dir testdata\tables --expect 30
+go run .\cmd\prism -- agg --data-dir testdata\tables --table events --group country --agg "count,sum(amount_cents)" --order count --desc --limit 10
+go run .\cmd\prism -- sql --data-dir testdata\tables "SELECT country, COUNT(*) FROM events GROUP BY country ORDER BY COUNT(*) DESC LIMIT 5"
+py -3 .\scripts\agg_oracle.py --data-dir testdata\tables
 ```
 
-The oracle uses PyArrow compute (not pandas) so `NULL > 0` stays unknown, matching the engine. After `go build -o prism.exe .\cmd\prism` you can run `.\prism.exe` with the same flags.
+The filter oracle uses PyArrow compute (not pandas) so `NULL > 0` stays unknown, matching the engine. After `go build -o prism.exe .\cmd\prism` you can run `.\prism.exe` with the same flags.
+
+SQL dialect: [docs/sql.md](sql.md).
 
 ### 4. Generate larger tables
 
@@ -162,7 +167,7 @@ Stop later with `docker compose down`.
 | Next.js workbench | Phase 13 |
 | `verify_against_postgres.py` | Phase 10 |
 | `prism bench` | Phase 11 |
-| SQL (`SELECT ...`) | Phase 5+ |
+| EXPLAIN / row-group skipping | Phase 6–7 |
 
 ---
 

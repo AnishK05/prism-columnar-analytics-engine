@@ -7,24 +7,26 @@ A miniature **vectorized, single-node OLAP engine** for learning how analytical 
 Blueprint: **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)** (decisions locked in §20).  
 Interview script (fill after measurement): **[WRITEUP.md](./WRITEUP.md)**.
 
-## What’s here now (Phase 0–3)
+## What’s here now (Phase 0–5)
 
 - `prism tables` / `prism describe` — catalog with cached row-group min/max (zone maps)
 - `prism inspect` / `prism scan` — Parquet → Arrow, column pruning
-- `prism scan --where 'amount_cents > 0 AND country = ''US'''` — vectorized filter (SQL three-valued logic; `NULL > 0` is not TRUE)
+- `prism scan --where` — vectorized filter (SQL three-valued logic)
+- `prism agg` — hash aggregate (`COUNT`/`SUM`/`AVG`/`MIN`/`MAX`), sort, limit
+- `prism sql` — Prism SQL lexer/parser/binder + the same pipeline ([docs/sql.md](docs/sql.md))
 - Python generator for synthetic `events` / `users` / `products`
 - Committed fixture: `testdata/tables` (8,192 `events` rows, `ts` clustered)
 
 ```bash
 go test ./...
 go run ./cmd/prism tables --data-dir testdata/tables
-go run ./cmd/prism describe events --data-dir testdata/tables
-go run ./cmd/prism scan --data-dir testdata/tables --table events --where "amount_cents > 0 AND country = 'US'" --columns country,amount_cents --limit 10
+go run ./cmd/prism agg --data-dir testdata/tables --table events --group country --agg 'count,sum(amount_cents)' --order count --desc --limit 10
+go run ./cmd/prism sql --data-dir testdata/tables "SELECT country, COUNT(*) FROM events GROUP BY country ORDER BY COUNT(*) DESC LIMIT 5"
 ```
 
 On Windows PowerShell, use `.\` paths; see `docs/WINDOWS.md`.
 
-SQL, aggregations, and the Next.js workbench are not implemented yet.
+The Next.js workbench, EXPLAIN, and row-group skipping are not implemented yet.
 
 ## Resume line (placeholders — rewrite after Phase 11)
 
@@ -47,4 +49,6 @@ Pinned `github.com/apache/arrow-go/v18 v18.0.0` so Go 1.22 works. Newer Arrow Go
 | 1 | Parquet → Arrow scan + generator | Done |
 | 2 | Catalog stats, tables/describe | Done |
 | 3 | Vectorized `--where` filters | Done |
-| 4+ | Aggregations, SQL, exec, UI | Not started |
+| 4 | Hash aggregate, sort, limit | Done |
+| 5 | SQL lexer / parser / binder | Done |
+| 6+ | Planner, skipping, dual engine, UI | Not started |

@@ -11,9 +11,11 @@ import (
 	"text/tabwriter"
 
 	"github.com/AnishK05/prism-columnar-analytics-engine/internal/catalog"
+	"github.com/AnishK05/prism-columnar-analytics-engine/internal/exec"
 	"github.com/AnishK05/prism-columnar-analytics-engine/internal/expr"
 	"github.com/AnishK05/prism-columnar-analytics-engine/internal/kernel"
 	"github.com/AnishK05/prism-columnar-analytics-engine/internal/parquetscan"
+	"github.com/AnishK05/prism-columnar-analytics-engine/internal/sql"
 	"github.com/AnishK05/prism-columnar-analytics-engine/internal/version"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -46,6 +48,10 @@ func run(args []string) error {
 		return cmdTables(args[1:])
 	case "describe":
 		return cmdDescribe(args[1:])
+	case "agg":
+		return cmdAgg(args[1:])
+	case "sql":
+		return cmdSQL(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], helpText)
 	}
@@ -62,6 +68,8 @@ Commands:
   describe   Schema, row counts, and cached row-group stats
   inspect    Dump Parquet schema, row groups, and min/max stats
   scan       Read selected columns (optional --where) and print rows
+  agg        Hash aggregate (flag-based GROUP BY)
+  sql        Parse/bind/run a Prism SQL SELECT
   help       Show this message
 
 Examples:
@@ -71,6 +79,8 @@ Examples:
   go run ./cmd/prism inspect --table events
   go run ./cmd/prism scan --table events --columns country,amount_cents --limit 5
   go run ./cmd/prism scan --table events --where "amount_cents > 0 AND country = 'US'" --columns country,amount_cents
+  go run ./cmd/prism agg --table events --group country --agg count,sum(amount_cents) --order count --desc --limit 10
+  go run ./cmd/prism sql --data-dir testdata/tables "SELECT country, COUNT(*) FROM events GROUP BY country ORDER BY COUNT(*) DESC LIMIT 5"
 `
 
 func printHelp(w io.Writer) {
@@ -375,6 +385,179 @@ func cmdScan(args []string) error {
 		printed, rowsKept, st.RowsRead, st.BatchesEmitted, st.ColumnsRead, strings.Join(st.ColumnNames, ","),
 		st.RowGroupsRead, parquetscan.FormatBytes(st.CompressedBytes), st.FilesOpened)
 	return nil
+}
+
+func cmdAgg(args []string) error {
+	fs := flag.NewFlagSet("agg", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	table := fs.String("table", "", "table name")
+	dataDir := fs.String("data-dir", "", "tables root")
+	group := fs.String("group", "", "comma-separated GROUP BY columns")
+	aggList := fs.String("agg", "count", "aggregates: count,sum(col),avg(col),min(col),max(col)")
+	where := fs.String("where", "", "optional predicate")
+	order := fs.String("order", "", "comma-separated output columns, suffix :desc")
+	limit := fs.Int64("limit", 20, "max rows to print (0 = all)")
+	batch := fs.Int64("batch-size", parquetscan.DefaultBatchSize, "Arrow batch size")
+	if err := fs.Parse(flagsFirst(args)); err != nil {
+		return err
+	}
+	if *table == "" {
+		return fmt.Errorf("agg: --table is required")
+	}
+	cat, err := catalog.Load(catalog.ResolveDataDir(*dataDir))
+	if err != nil {
+		return err
+	}
+	tbl, err := cat.Table(*table)
+	if err != nil {
+		return err
+	}
+	aggs, err := kernel.ParseAggList(*aggList)
+	if err != nil {
+		return err
+	}
+	var keys []string
+	if *group != "" {
+		for _, g := range strings.Split(*group, ",") {
+			g = strings.TrimSpace(g)
+			if g != "" {
+				keys = append(keys, g)
+			}
+		}
+	}
+	var pred expr.Expr
+	if *where != "" {
+		pred, err = expr.ParseWhere(*where)
+		if err != nil {
+			return err
+		}
+	}
+	var orderKeys []kernel.OrderKey
+	if *order != "" {
+		for _, part := range strings.Split(*order, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			desc := false
+			name := part
+			if i := strings.LastIndexByte(part, ':'); i >= 0 {
+				name = part[:i]
+				if strings.EqualFold(part[i+1:], "desc") {
+					desc = true
+				}
+			}
+			orderKeys = append(orderKeys, kernel.OrderKey{Name: name, Desc: desc})
+		}
+	}
+	res, err := exec.Run(context.Background(), exec.Request{
+		Table:     tbl,
+		Where:     pred,
+		GroupBy:   keys,
+		Aggs:      aggs,
+		Order:     orderKeys,
+		Limit:     *limit,
+		BatchSize: *batch,
+	})
+	if err != nil {
+		return err
+	}
+	defer res.Record.Release()
+	printRecord(os.Stdout, res.Record, res.Record.NumRows())
+	st := res.Stats
+	fmt.Fprintf(os.Stderr, "\nagg: rows=%d groups=%d rows_read=%d batches=%d columns=%d row_groups=%d files=%d\n",
+		res.Record.NumRows(), res.Groups, st.RowsRead, st.BatchesEmitted, st.ColumnsRead, st.RowGroupsRead, st.FilesOpened)
+	return nil
+}
+
+func cmdSQL(args []string) error {
+	fs := flag.NewFlagSet("sql", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	dataDir := fs.String("data-dir", "", "tables root")
+	filePath := fs.String("file", "", "read SQL from a file")
+	astOnly := fs.Bool("ast", false, "print the parsed AST and exit")
+	bindOnly := fs.Bool("bind-only", false, "parse+bind and print a summary (do not execute)")
+	batch := fs.Int64("batch-size", parquetscan.DefaultBatchSize, "Arrow batch size")
+	if err := fs.Parse(flagsFirst(args)); err != nil {
+		return err
+	}
+	src := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if *filePath != "" {
+		b, err := os.ReadFile(*filePath)
+		if err != nil {
+			return err
+		}
+		src = string(b)
+	}
+	if src == "" {
+		return fmt.Errorf("sql: query required (prism sql \"SELECT ...\" or --file)")
+	}
+	q, err := sql.Parse(src)
+	if err != nil {
+		return err
+	}
+	if *astOnly {
+		fmt.Println(q.String())
+		return nil
+	}
+	cat, err := catalog.Load(catalog.ResolveDataDir(*dataDir))
+	if err != nil {
+		return err
+	}
+	bound, err := sql.Bind(q, cat)
+	if err != nil {
+		return err
+	}
+	if *bindOnly {
+		fmt.Printf("table: %s\n", bound.Table.Name)
+		fmt.Printf("scan_cols: %s\n", strings.Join(bound.ScanCols, ", "))
+		if bound.Where != nil {
+			fmt.Printf("where: %s\n", bound.Where.String())
+		}
+		if bound.IsAgg {
+			fmt.Printf("group_by: %s\n", strings.Join(bound.GroupBy, ", "))
+			for _, a := range bound.Aggs {
+				fmt.Printf("agg: %s %s -> %s\n", a.Fn, a.Input, a.Name)
+			}
+		}
+		fmt.Printf("project: %s\n", strings.Join(bound.Project, ", "))
+		return nil
+	}
+	req := bound.Request()
+	req.BatchSize = *batch
+	res, err := exec.Run(context.Background(), req)
+	if err != nil {
+		return err
+	}
+	defer res.Record.Release()
+	printRecord(os.Stdout, res.Record, res.Record.NumRows())
+	st := res.Stats
+	fmt.Fprintf(os.Stderr, "\nsql: rows=%d groups=%d rows_read=%d batches=%d columns=%d row_groups=%d files=%d\n",
+		res.Record.NumRows(), res.Groups, st.RowsRead, st.BatchesEmitted, st.ColumnsRead, st.RowGroupsRead, st.FilesOpened)
+	return nil
+}
+
+func printRecord(w io.Writer, rec arrow.Record, limit int64) {
+	if rec == nil || rec.NumRows() == 0 || rec.NumCols() == 0 {
+		return
+	}
+	if limit <= 0 || limit > rec.NumRows() {
+		limit = rec.NumRows()
+	}
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	names := make([]string, rec.NumCols())
+	for i := 0; i < int(rec.NumCols()); i++ {
+		names[i] = rec.ColumnName(i)
+	}
+	fmt.Fprintln(tw, strings.Join(names, "\t"))
+	for i := int64(0); i < limit; i++ {
+		cells := make([]string, rec.NumCols())
+		for c := 0; c < int(rec.NumCols()); c++ {
+			cells[c] = formatCell(rec.Column(c), int(i))
+		}
+		fmt.Fprintln(tw, strings.Join(cells, "\t"))
+	}
+	tw.Flush()
 }
 
 func unionStrings(a, b []string) []string {
