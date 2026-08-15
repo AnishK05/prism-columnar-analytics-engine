@@ -1,0 +1,11 @@
+# Checkout LF on Windows so Go/Python/TS do not pick up CRLF.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.parquet binary
+*.mp4 binary
+*.exe binary
