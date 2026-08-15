@@ -1,0 +1,16 @@
+/data/
+*.exe
+/prism
+/prismd
+__pycache__/
+*.py[cod]
+.pytest_cache/
+web/node_modules/
+web/.next/
+bench/results/*.json
+!bench/results/sample.json
+.idea/
+.vscode/
+*.log
+.DS_Store
+Thumbs.db

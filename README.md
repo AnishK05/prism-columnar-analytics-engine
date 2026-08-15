@@ -7,7 +7,24 @@ A miniature **vectorized, single-node OLAP engine** for learning how analytical 
 Blueprint: **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)** (decisions locked in §20).  
 Interview script (fill after measurement): **[WRITEUP.md](./WRITEUP.md)**.
 
-The engine is **not implemented yet**. Implementation starts at Phase 0 of the plan.
+## What’s here now (Phase 0–1)
+
+- `go run ./cmd/prism version`
+- `prism inspect` — Parquet schema, row groups, min/max stats
+- `prism scan` — read selected columns as Arrow batches (column pruning)
+- Python generator for synthetic `events` / `users` / `products`
+- Docker Compose Postgres 16 (oracle, used later)
+- Committed fixture: `testdata/tables` (8,192 `events` rows)
+
+```bash
+go test ./...
+go run ./cmd/prism inspect --data-dir testdata/tables --table events
+go run ./cmd/prism scan --data-dir testdata/tables --table events --columns country,amount_cents --limit 5
+```
+
+On Windows PowerShell, use `.\` paths; see `docs/WINDOWS.md`.
+
+SQL, filters, aggregations, and the Next.js workbench are not implemented yet.
 
 ## Resume line (placeholders — rewrite after Phase 11)
 
@@ -17,15 +34,15 @@ Those numbers are a direction, not a quota. Measure on this laptop, name the que
 
 ## Stack (locked)
 
-Go · Apache Arrow · Apache Parquet · PostgreSQL (correctness oracle only) · Python / NumPy / PyArrow · Next.js / TypeScript · Docker Desktop
+Go 1.22 · Apache Arrow Go **v18.0.0** · Apache Parquet · PostgreSQL (correctness oracle only) · Python / NumPy / PyArrow · Next.js / TypeScript (later) · Docker Desktop
 
-No DuckDB, no joins, no INSERT SQL, no license file in v1. Dataset is synthetic `events`.
+Pinned `github.com/apache/arrow-go/v18 v18.0.0` so Go 1.22 works. Newer Arrow Go releases need a newer toolchain.
 
 ## Status
 
 | Phase | Description | State |
 |---|---|---|
-| Plan | Blueprint + Windows runbook | Locked |
-| v1 engine | Scan / filter / agg SQL over Parquet | Not started |
-| Bench | Laptop-scale PrismBench + dual executor | Not started |
-| UI | Three-page workbench | Not started |
+| Plan | Blueprint + Windows runbook | Done |
+| 0 | Scaffold, CLI, Compose, CI | Done |
+| 1 | Parquet → Arrow scan + generator | Done |
+| 2+ | Catalog stats, SQL, exec, UI | Not started |
