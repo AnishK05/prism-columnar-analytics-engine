@@ -1,4 +1,4 @@
-// Package exec runs a fixed Scan → Filter → Aggregate → Sort → Limit pipeline.
+// Package exec runs Scan → Filter → Aggregate → Sort → Limit.
 package exec
 
 import (
@@ -14,21 +14,30 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 )
 
-// Request is a physical-ish plan for Phase 4 (no optimizer yet).
+const (
+	EngineVectorized = "vectorized"
+	EngineRow        = "row"
+)
+
+// Request is a physical plan for the execution pipeline.
 type Request struct {
 	Table     *catalog.Table
 	Where     expr.Expr
 	ScanCols  []string // empty = all
 	GroupBy   []string
 	Aggs      []kernel.AggSpec
-	Project   []string // output names after agg/scan; empty = keep
+	Project   []string
 	Order     []kernel.OrderKey
-	Limit     int64 // 0 = no SQL limit
+	Limit     int64
 	BatchSize int64
 	// RowGroups maps file path → row-group indices to read (nil = all).
 	RowGroups map[string][]int
 	// Empty is a constant-false plan: return a 0-row result without scanning pages.
 	Empty bool
+	// Engine is "vectorized" (default) or "row".
+	Engine string
+	// Jobs is the worker count. <=0 means sequential (1 worker).
+	Jobs int
 }
 
 // Result is one output record plus scan stats.
@@ -46,6 +55,40 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	if len(req.Table.Files) == 0 {
 		return nil, fmt.Errorf("table %q has no parquet files", req.Table.Name)
 	}
+	prep, err := prepare(req)
+	if err != nil {
+		return nil, err
+	}
+	jobs := req.Jobs
+	if jobs < 1 {
+		jobs = 1
+	}
+	nMorsel := len(listMorsels(req))
+	if req.Empty {
+		nMorsel = 0
+	}
+	if jobs > 1 && nMorsel > 1 {
+		if jobs > nMorsel {
+			jobs = nMorsel
+		}
+		req.Jobs = jobs
+		if req.Engine == EngineRow {
+			return runRowParallel(ctx, req, prep, jobs)
+		}
+		return runParallel(ctx, req, prep, jobs)
+	}
+	if req.Engine == EngineRow {
+		return runRowSerial(ctx, req, prep)
+	}
+	return runVecSerial(ctx, req, prep)
+}
+
+type prepared struct {
+	scanCols []string
+	isAgg    bool
+}
+
+func prepare(req Request) (prepared, error) {
 	isAgg := len(req.Aggs) > 0 || len(req.GroupBy) > 0
 	scanCols := union(req.ScanCols, expr.Columns(req.Where))
 	scanCols = union(scanCols, req.GroupBy)
@@ -61,10 +104,12 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		}
 	}
 	if isAgg && len(scanCols) == 0 && len(req.Table.Fields) > 0 {
-		// COUNT(*) still needs to iterate rows; read one column instead of *.
 		scanCols = []string{req.Table.Fields[0].Name}
 	}
+	return prepared{scanCols: scanCols, isAgg: isAgg}, nil
+}
 
+func scanOptions(req Request, prep prepared) parquetscan.Options {
 	rowGroups := req.RowGroups
 	if req.Empty {
 		rowGroups = map[string][]int{}
@@ -72,38 +117,37 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 			rowGroups[f] = []int{}
 		}
 	}
-
-	rdr, err := parquetscan.Open(ctx, req.Table.Files, parquetscan.Options{
-		Columns:   scanCols,
+	return parquetscan.Options{
+		Columns:   prep.scanCols,
 		BatchSize: req.BatchSize,
 		RowGroups: rowGroups,
-	})
+	}
+}
+
+func overlayCatalogStats(st parquetscan.Stats, req Request) parquetscan.Stats {
+	if req.Table != nil {
+		st.FilesTotal = len(req.Table.Files)
+		st.RowGroupsTotal = req.Table.NumRowGroups
+		if st.RowGroupsRead <= st.RowGroupsTotal {
+			st.RowGroupsSkipped = st.RowGroupsTotal - st.RowGroupsRead
+		}
+	}
+	return st
+}
+
+func runVecSerial(ctx context.Context, req Request, prep prepared) (*Result, error) {
+	rdr, err := parquetscan.Open(ctx, req.Table.Files, scanOptions(req, prep))
 	if err != nil {
 		return nil, err
 	}
 	defer rdr.Close()
 
-	var agg *kernel.HashAgg
-	if isAgg {
-		agg, err = kernel.NewHashAgg(req.GroupBy, req.Aggs)
-		if err != nil {
-			return nil, err
-		}
+	sink, err := newSink(req, prep)
+	if err != nil {
+		return nil, err
 	}
-	var top *kernel.TopN
-	useTop := !isAgg && len(req.Order) > 0 && req.Limit > 0
-	if useTop {
-		top, err = kernel.NewTopN(int(req.Limit), req.Order)
-		if err != nil {
-			return nil, err
-		}
-	}
-	var collected []arrow.Record
-	var kept int64
-	stopEarly := !isAgg && !useTop && req.Limit > 0 && len(req.Order) == 0
-
 	for {
-		if stopEarly && kept >= req.Limit {
+		if sink.stopEarly && sink.kept >= req.Limit {
 			break
 		}
 		rec, err := rdr.Next()
@@ -111,151 +155,289 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 			break
 		}
 		if err != nil {
-			releaseAll(collected)
+			sink.release()
 			return nil, err
 		}
-		cur := rec
-		if req.Where != nil {
-			mask, err := kernel.Eval(req.Where, rec)
-			if err != nil {
-				rec.Release()
-				releaseAll(collected)
-				return nil, err
-			}
-			compacted, err := kernel.Compact(rec, mask)
-			mask.Release()
+		if err := sink.addVec(rec); err != nil {
 			rec.Release()
-			if err != nil {
-				releaseAll(collected)
-				return nil, err
-			}
-			cur = compacted
+			sink.release()
+			return nil, err
 		}
-		if cur.NumRows() == 0 {
-			cur.Release()
-			continue
-		}
-		if isAgg {
-			err := agg.Add(cur)
-			cur.Release()
-			if err != nil {
-				return nil, err
-			}
-			continue
-		}
-		if useTop {
-			err := top.Add(cur)
-			cur.Release()
-			if err != nil {
-				return nil, err
-			}
-			continue
-		}
-		if stopEarly {
-			need := req.Limit - kept
-			if cur.NumRows() > need {
-				trimmed, err := kernel.LimitRecord(cur, need)
-				cur.Release()
-				if err != nil {
-					releaseAll(collected)
-					return nil, err
-				}
-				cur = trimmed
-			}
-		}
-		kept += cur.NumRows()
-		collected = append(collected, cur)
 	}
+	out, groups, err := sink.finish(rdr.Schema())
+	if err != nil {
+		return nil, err
+	}
+	return &Result{Record: out, Stats: overlayCatalogStats(rdr.Stats(), req), Groups: groups}, nil
+}
 
-	var out arrow.Record
-	groups := 0
-	switch {
-	case isAgg:
-		out, err = agg.Finish()
+type sink struct {
+	req       Request
+	prep      prepared
+	agg       *kernel.HashAgg
+	top       *kernel.TopN
+	useTop    bool
+	stopEarly bool
+	collected []arrow.Record
+	kept      int64
+}
+
+func newSink(req Request, prep prepared) (*sink, error) {
+	s := &sink{req: req, prep: prep}
+	var err error
+	if prep.isAgg {
+		s.agg, err = kernel.NewHashAgg(req.GroupBy, req.Aggs)
 		if err != nil {
 			return nil, err
 		}
-		groups = agg.NumGroups()
-		if len(req.Order) > 0 {
-			sorted, err := kernel.SortRecord(out, req.Order)
+	}
+	s.useTop = !prep.isAgg && len(req.Order) > 0 && req.Limit > 0
+	if s.useTop {
+		s.top, err = kernel.NewTopN(int(req.Limit), req.Order)
+		if err != nil {
+			return nil, err
+		}
+	}
+	s.stopEarly = !prep.isAgg && !s.useTop && req.Limit > 0 && len(req.Order) == 0
+	return s, nil
+}
+
+func (s *sink) addVec(rec arrow.Record) error {
+	cur := rec
+	if s.req.Where != nil {
+		mask, err := kernel.Eval(s.req.Where, rec)
+		if err != nil {
+			return err
+		}
+		compacted, err := kernel.Compact(rec, mask)
+		mask.Release()
+		rec.Release()
+		if err != nil {
+			return err
+		}
+		cur = compacted
+	}
+	return s.take(cur)
+}
+
+func (s *sink) addRow(rec arrow.Record) error {
+	n := int(rec.NumRows())
+	if s.req.Where == nil && s.prep.isAgg {
+		for i := 0; i < n; i++ {
+			if err := s.agg.AddRecordRow(rec, i); err != nil {
+				rec.Release()
+				return err
+			}
+		}
+		rec.Release()
+		return nil
+	}
+	if s.req.Where == nil {
+		return s.take(rec)
+	}
+	// Row-at-a-time predicate, then gather survivors.
+	sel := make([]bool, n)
+	any := false
+	for i := 0; i < n; i++ {
+		keep, err := kernel.KeepRow(s.req.Where, rec, i)
+		if err != nil {
+			rec.Release()
+			return err
+		}
+		sel[i] = keep
+		any = any || keep
+	}
+	if s.prep.isAgg {
+		for i := 0; i < n; i++ {
+			if !sel[i] {
+				continue
+			}
+			if err := s.agg.AddRecordRow(rec, i); err != nil {
+				rec.Release()
+				return err
+			}
+		}
+		rec.Release()
+		return nil
+	}
+	if !any {
+		rec.Release()
+		return nil
+	}
+	mask := boolMask(sel)
+	compacted, err := kernel.Compact(rec, mask)
+	mask.Release()
+	rec.Release()
+	if err != nil {
+		return err
+	}
+	return s.take(compacted)
+}
+
+func (s *sink) take(cur arrow.Record) error {
+	if cur.NumRows() == 0 {
+		cur.Release()
+		return nil
+	}
+	if s.prep.isAgg {
+		err := s.agg.Add(cur)
+		cur.Release()
+		return err
+	}
+	if s.useTop {
+		err := s.top.Add(cur)
+		cur.Release()
+		return err
+	}
+	if s.stopEarly {
+		need := s.req.Limit - s.kept
+		if cur.NumRows() > need {
+			trimmed, err := kernel.LimitRecord(cur, need)
+			cur.Release()
+			if err != nil {
+				return err
+			}
+			cur = trimmed
+		}
+	}
+	s.kept += cur.NumRows()
+	s.collected = append(s.collected, cur)
+	return nil
+}
+
+func (s *sink) finish(schema *arrow.Schema) (arrow.Record, int, error) {
+	var out arrow.Record
+	var err error
+	groups := 0
+	switch {
+	case s.prep.isAgg:
+		out, err = s.agg.Finish()
+		if err != nil {
+			return nil, 0, err
+		}
+		groups = s.agg.NumGroups()
+		if len(s.req.Order) > 0 {
+			sorted, err := kernel.SortRecord(out, s.req.Order)
 			out.Release()
 			if err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			out = sorted
 		}
-		if req.Limit > 0 {
-			lim, err := kernel.LimitRecord(out, req.Limit)
+		if s.req.Limit > 0 {
+			lim, err := kernel.LimitRecord(out, s.req.Limit)
 			out.Release()
 			if err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			out = lim
 		}
-	case useTop:
-		out, err = top.Finish()
+	case s.useTop:
+		for _, rec := range s.collected {
+			if err := s.top.Add(rec); err != nil {
+				releaseAll(s.collected)
+				s.collected = nil
+				return nil, 0, err
+			}
+			rec.Release()
+		}
+		s.collected = nil
+		out, err = s.top.Finish()
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	default:
-		if len(collected) == 0 {
-			// empty result: still need a schema — scan one empty projection via reader schema
-			schema := rdr.Schema()
+		if len(s.collected) == 0 {
 			if schema == nil {
-				return nil, fmt.Errorf("empty scan with no schema")
+				return nil, 0, fmt.Errorf("empty scan with no schema")
 			}
-			empty := emptyRecord(schema)
-			out = empty
-		} else if len(req.Order) > 0 {
-			cat, err := kernel.ConcatRecords(collected)
-			releaseAll(collected)
-			collected = nil
+			out = kernel.EmptyRecord(schema)
+		} else if len(s.req.Order) > 0 {
+			cat, err := kernel.ConcatRecords(s.collected)
+			releaseAll(s.collected)
+			s.collected = nil
 			if err != nil {
-				return nil, err
+				return nil, 0, err
 			}
-			sorted, err := kernel.SortRecord(cat, req.Order)
+			sorted, err := kernel.SortRecord(cat, s.req.Order)
 			cat.Release()
 			if err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			out = sorted
-			if req.Limit > 0 {
-				lim, err := kernel.LimitRecord(out, req.Limit)
+			if s.req.Limit > 0 {
+				lim, err := kernel.LimitRecord(out, s.req.Limit)
 				out.Release()
 				if err != nil {
-					return nil, err
+					return nil, 0, err
 				}
 				out = lim
 			}
 		} else {
-			out, err = kernel.ConcatRecords(collected)
-			releaseAll(collected)
-			collected = nil
+			out, err = kernel.ConcatRecords(s.collected)
+			releaseAll(s.collected)
+			s.collected = nil
 			if err != nil {
-				return nil, err
+				return nil, 0, err
+			}
+			if s.req.Limit > 0 && out.NumRows() > s.req.Limit {
+				lim, err := kernel.LimitRecord(out, s.req.Limit)
+				out.Release()
+				if err != nil {
+					return nil, 0, err
+				}
+				out = lim
 			}
 		}
 	}
-
-	if len(req.Project) > 0 {
-		proj, err := kernel.Project(out, req.Project)
+	if len(s.req.Project) > 0 {
+		proj, err := kernel.Project(out, s.req.Project)
 		out.Release()
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = proj
 	}
-
-	return &Result{Record: out, Stats: rdr.Stats(), Groups: groups}, nil
+	return out, groups, nil
 }
 
-func emptyRecord(schema *arrow.Schema) arrow.Record {
-	// LimitRecord-style empty: concat of nothing — build via Limit of a zero-col trick
-	// Use Concat on no rows: Project from a 0-row record isn't available; construct via Sort on empty isn't either.
-	// parquet reader schema with 0 rows: we synthesize using LimitRecord after...
-	// Simplest: NewRecord with empty arrays via RecordBuilder happens in HashAgg; for scan,
-	// create via ConcatRecords is wrong. Use kernel helper.
-	return kernel.EmptyRecord(schema)
+func (s *sink) release() {
+	releaseAll(s.collected)
+	s.collected = nil
+}
+
+func runRowSerial(ctx context.Context, req Request, prep prepared) (*Result, error) {
+	rdr, err := parquetscan.Open(ctx, req.Table.Files, scanOptions(req, prep))
+	if err != nil {
+		return nil, err
+	}
+	defer rdr.Close()
+	sink, err := newSink(req, prep)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		if sink.stopEarly && sink.kept >= req.Limit {
+			break
+		}
+		rec, err := rdr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			sink.release()
+			return nil, err
+		}
+		if err := sink.addRow(rec); err != nil {
+			sink.release()
+			return nil, err
+		}
+	}
+	out, groups, err := sink.finish(rdr.Schema())
+	if err != nil {
+		return nil, err
+	}
+	return &Result{Record: out, Stats: overlayCatalogStats(rdr.Stats(), req), Groups: groups}, nil
 }
 
 func union(parts ...[]string) []string {

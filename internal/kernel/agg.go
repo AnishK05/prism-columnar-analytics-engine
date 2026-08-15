@@ -391,6 +391,149 @@ func (h *HashAgg) Add(rec arrow.Record) error {
 	return nil
 }
 
+// AddRecordRow accumulates one decoded row. Used by the row-at-a-time engine.
+func (h *HashAgg) AddRecordRow(rec arrow.Record, row int) error {
+	if rec == nil {
+		return fmt.Errorf("nil record")
+	}
+	if err := h.captureKeyTypes(rec); err != nil {
+		return err
+	}
+	h.buf = h.buf[:0]
+	keys := make([]cell, len(h.Keys))
+	for i, name := range h.Keys {
+		arr, err := colByName(rec, name)
+		if err != nil {
+			return err
+		}
+		c, err := cellFromArray(arr, int(row))
+		if err != nil {
+			return err
+		}
+		keys[i] = c
+		h.buf = appendCellKey(h.buf, c)
+	}
+	k := string(h.buf)
+	gi, ok := h.idx[k]
+	if !ok {
+		g := groupRow{keys: keys, aggs: make([]acc, len(h.Aggs))}
+		for i, spec := range h.Aggs {
+			g.aggs[i].fn = spec.Fn
+		}
+		gi = len(h.rows)
+		h.idx[k] = gi
+		h.rows = append(h.rows, g)
+	}
+	for i, spec := range h.Aggs {
+		if spec.Fn == AggCountStar {
+			if err := h.rows[gi].aggs[i].add(nil, int(row)); err != nil {
+				return err
+			}
+			continue
+		}
+		arr, err := colByName(rec, spec.Input)
+		if err != nil {
+			return err
+		}
+		if err := h.rows[gi].aggs[i].add(arr, int(row)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Merge folds another partial aggregator into h (two-phase / parallel agg).
+func (h *HashAgg) Merge(o *HashAgg) error {
+	if o == nil || len(o.rows) == 0 {
+		return nil
+	}
+	if len(h.Keys) != len(o.Keys) || len(h.Aggs) != len(o.Aggs) {
+		return fmt.Errorf("hash agg merge: shape mismatch")
+	}
+	if h.keyTypes == nil && o.keyTypes != nil {
+		h.keyTypes = append([]arrow.DataType(nil), o.keyTypes...)
+	}
+	for _, g := range o.rows {
+		h.buf = h.buf[:0]
+		for _, c := range g.keys {
+			h.buf = appendCellKey(h.buf, c)
+		}
+		k := string(h.buf)
+		gi, ok := h.idx[k]
+		if !ok {
+			ng := groupRow{
+				keys: append([]cell(nil), g.keys...),
+				aggs: append([]acc(nil), g.aggs...),
+			}
+			h.idx[k] = len(h.rows)
+			h.rows = append(h.rows, ng)
+			continue
+		}
+		for i := range g.aggs {
+			if err := h.rows[gi].aggs[i].merge(g.aggs[i]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (a *acc) merge(o acc) error {
+	if a.fn != o.fn && o.fn != 0 {
+		// o.fn is set on constructed groups; tolerate zero from empty acc
+	}
+	switch a.fn {
+	case AggCountStar, AggCount:
+		a.n += o.n
+		a.seen = a.seen || o.seen
+		return nil
+	case AggSum, AggAvg:
+		if o.n == 0 && !o.seen {
+			return nil
+		}
+		a.n += o.n
+		a.sumI += o.sumI
+		a.sumF += o.sumF
+		if o.kind == accF64 {
+			a.kind = accF64
+		} else if a.kind == accNone {
+			a.kind = o.kind
+		}
+		a.seen = true
+		return nil
+	case AggMin:
+		if !o.seen {
+			return nil
+		}
+		if !a.seen {
+			*a = o
+			a.fn = AggMin
+			return nil
+		}
+		if cmpCellTyped(o.minCell(), a.minCell()) < 0 {
+			a.setMinMax(o.minCell())
+		}
+		a.n += o.n
+		return nil
+	case AggMax:
+		if !o.seen {
+			return nil
+		}
+		if !a.seen {
+			*a = o
+			a.fn = AggMax
+			return nil
+		}
+		if cmpCellTyped(o.maxCell(), a.maxCell()) > 0 {
+			a.setMinMax(o.maxCell())
+		}
+		a.n += o.n
+		return nil
+	default:
+		return fmt.Errorf("merge: unknown agg")
+	}
+}
+
 func (h *HashAgg) captureKeyTypes(rec arrow.Record) error {
 	if h.keyTypes != nil {
 		return nil

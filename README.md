@@ -7,7 +7,7 @@ A miniature **vectorized, single-node OLAP engine** for learning how analytical 
 Blueprint: **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)** (decisions locked in §20).  
 Interview script (fill after measurement): **[WRITEUP.md](./WRITEUP.md)**.
 
-## What’s here now (Phase 0–7)
+## What’s here now (Phase 0–9)
 
 - `prism tables` / `prism describe` — catalog with cached row-group min/max (zone maps)
 - `prism inspect` / `prism scan` — Parquet → Arrow, column pruning
@@ -15,6 +15,8 @@ Interview script (fill after measurement): **[WRITEUP.md](./WRITEUP.md)**.
 - `prism agg` — hash aggregate (`COUNT`/`SUM`/`AVG`/`MIN`/`MAX`), sort, limit
 - `prism sql` — Prism SQL lexer/parser/binder + the same pipeline ([docs/sql.md](docs/sql.md))
 - `prism explain` — physical plan (text or JSON); `--analyze` adds bytes/rows
+- Dual engine: `--engine=vectorized|row` (same skip/prune; row path is a per-row loop)
+- Parallel row-group workers: `--jobs` / `PRISM_PARALLELISM` (partial + merge aggregation)
 - Row-group skipping from Parquet min/max (zone maps); Q2 on the fixture keeps 1 of 4 groups
 - Python generator for synthetic `events` / `users` / `products`
 - Committed fixture: `testdata/tables` (8,192 `events` rows, `ts` clustered)
@@ -22,12 +24,15 @@ Interview script (fill after measurement): **[WRITEUP.md](./WRITEUP.md)**.
 ```bash
 go test ./...
 go run ./cmd/prism tables --data-dir testdata/tables
-go run ./cmd/prism agg --data-dir testdata/tables --table events --group country --agg 'count,sum(amount_cents)' --order count --desc --limit 10
 go run ./cmd/prism sql --data-dir testdata/tables "SELECT country, COUNT(*) FROM events GROUP BY country ORDER BY COUNT(*) DESC LIMIT 5"
+go run ./cmd/prism sql --engine=row --jobs=1 --data-dir testdata/tables --file testdata/sql/ok/q1.sql
+go run ./cmd/prism sql --jobs=4 --data-dir testdata/tables --file testdata/sql/ok/q1.sql
 go run ./cmd/prism explain --data-dir testdata/tables --file testdata/sql/ok/q2.sql
 ```
 
 On Windows PowerShell, use `.\` paths; see `docs/WINDOWS.md`.
+
+Each parallel worker opens its own Parquet file handle for one row group, so there is no shared Arrow reader lock. Speedup vs `--jobs=1` is measured later on `dev`/`laptop` (Phase 11).
 
 The Next.js workbench is not implemented yet.
 
@@ -56,4 +61,6 @@ Pinned `github.com/apache/arrow-go/v18 v18.0.0` so Go 1.22 works. Newer Arrow Go
 | 5 | SQL lexer / parser / binder | Done |
 | 6 | Planner, optimizer, EXPLAIN | Done |
 | 7 | Row-group skipping (zone maps) | Done |
-| 8+ | Dual engine, parallelism, UI | Not started |
+| 8 | Dual engine (vectorized + row) | Done |
+| 9 | Parallel row-group workers | Done |
+| 10+ | Oracle, bench, HTTP, UI | Not started |

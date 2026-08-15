@@ -524,7 +524,7 @@ Keep `internal/` strict: the CLI and HTTP are thin. This is what you walk throug
 
 Each phase has a **learning goal**, **deliverable**, **tests**, and a **done when**. Do not start Phase N+1 until Phase N is demoable. Timeboxes are effort, not calendar promises — skip them if they get in the way, keep the sequence.
 
-**Progress:** Phase 0–7 are implemented (`tables`/`describe`, `--where`, `agg`, `sql`, `explain`, row-group skipping).
+**Progress:** Phase 0–9 are implemented (`tables`/`describe`, `--where`, `agg`, `sql`, `explain`, skip, dual engine, `--jobs`).
 
 ---
 
@@ -675,7 +675,7 @@ Each phase has a **learning goal**, **deliverable**, **tests**, and a **done whe
 - Row executor reuses binder/optimizer/scan skipping (see §9.2).
 - Result serialization: for CLI, table writer; for HTTP, JSON `{ columns, types, rows, profile }`. Cap default returned rows (e.g. 1000) even if agg is small.
 
-**Done when:** same SQL, both engines, identical results on `tiny` for Q1–Q8.
+**Done when:** same SQL, both engines, identical results on `tiny` for Q1–Q8. **Shipped in Phase 8–9** (`engine.Run`, `--engine=vectorized|row`; Q1–Q8 equivalence on the committed fixture; `--no-skip`/`--no-prune` for the later 3-way breakdown).
 
 ---
 
@@ -690,7 +690,7 @@ Each phase has a **learning goal**, **deliverable**, **tests**, and a **done whe
 - `PRISM_PARALLELISM` env / `--jobs`.
 - Careful: result order without `ORDER BY` is undefined; tests must compare as **multisets** (sort before diff) except when `ORDER BY` is present.
 
-**Done when:** Q1 on `dev` scales noticeably 1 → 4 cores (not necessarily linear). Document if Go’s parquet reader serializes on a lock — if it does, parallelize **across files** first.
+**Done when:** Q1 on `dev` scales noticeably 1 → 4 cores (not necessarily linear). Document if Go’s parquet reader serializes on a lock — if it does, parallelize **across files** first. **Shipped in Phase 8–9** (worker pool over `(file, row-group)` morsels; each worker opens its own Parquet handle, so there is no shared `pqarrow` reader lock). Scaling Q1 1→4 cores on generated `dev` is measured in Phase 11.
 
 ---
 

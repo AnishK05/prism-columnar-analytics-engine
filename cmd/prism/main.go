@@ -11,7 +11,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/AnishK05/prism-columnar-analytics-engine/internal/catalog"
-	"github.com/AnishK05/prism-columnar-analytics-engine/internal/exec"
+	"github.com/AnishK05/prism-columnar-analytics-engine/internal/engine"
 	"github.com/AnishK05/prism-columnar-analytics-engine/internal/expr"
 	"github.com/AnishK05/prism-columnar-analytics-engine/internal/kernel"
 	"github.com/AnishK05/prism-columnar-analytics-engine/internal/parquetscan"
@@ -85,6 +85,7 @@ Examples:
   go run ./cmd/prism scan --table events --where "amount_cents > 0 AND country = 'US'" --columns country,amount_cents
   go run ./cmd/prism agg --table events --group country --agg count,sum(amount_cents) --order count --desc --limit 10
   go run ./cmd/prism sql --data-dir testdata/tables "SELECT country, COUNT(*) FROM events GROUP BY country ORDER BY COUNT(*) DESC LIMIT 5"
+  go run ./cmd/prism sql --engine=row --jobs=1 --data-dir testdata/tables "SELECT COUNT(*) FROM events"
   go run ./cmd/prism explain --data-dir testdata/tables --file testdata/sql/ok/q2.sql
 `
 
@@ -426,6 +427,8 @@ func cmdAgg(args []string) error {
 	descAll := fs.Bool("desc", false, "sort every --order key descending")
 	limit := fs.Int64("limit", 20, "max rows to print (0 = all)")
 	batch := fs.Int64("batch-size", parquetscan.DefaultBatchSize, "Arrow batch size")
+	eng := fs.String("engine", "vectorized", "vectorized|row")
+	jobs := fs.Int("jobs", 0, "parallel workers (0 = PRISM_PARALLELISM or GOMAXPROCS)")
 	if err := fs.Parse(flagsFirst(args)); err != nil {
 		return err
 	}
@@ -478,7 +481,11 @@ func cmdAgg(args []string) error {
 			orderKeys = append(orderKeys, kernel.OrderKey{Name: name, Desc: desc || *descAll})
 		}
 	}
-	node := plan.Build(plan.Input{
+	kind, err := engine.ParseKind(*eng)
+	if err != nil {
+		return err
+	}
+	res, err := engine.RunInput(context.Background(), plan.Input{
 		Table:   tbl,
 		Where:   pred,
 		GroupBy: keys,
@@ -486,17 +493,15 @@ func cmdAgg(args []string) error {
 		Order:   orderKeys,
 		Limit:   *limit,
 		IsAgg:   true,
-	})
-	req := node.Request(*batch)
-	res, err := exec.Run(context.Background(), req)
+	}, engine.Opts{Engine: kind, Jobs: *jobs, BatchSize: *batch, Catalog: cat})
 	if err != nil {
 		return err
 	}
 	defer res.Record.Release()
 	printRecord(os.Stdout, res.Record, res.Record.NumRows())
-	st := res.Stats
-	fmt.Fprintf(os.Stderr, "\nagg: rows=%d groups=%d rows_read=%d batches=%d columns=%d row_groups_read=%d skipped=%d files=%d\n",
-		res.Record.NumRows(), res.Groups, st.RowsRead, st.BatchesEmitted, st.ColumnsRead, st.RowGroupsRead, st.RowGroupsSkipped, st.FilesOpened)
+	st := res.Profile
+	fmt.Fprintf(os.Stderr, "\nagg: engine=%s jobs=%d rows=%d groups=%d rows_read=%d columns=%d row_groups_read=%d skipped=%d elapsed_ms=%.2f\n",
+		st.Engine, st.Jobs, res.Record.NumRows(), res.Groups, st.RowsRead, st.ColumnsRead, st.RowGroupsRead, st.RowGroupsSkipped, st.ElapsedMs)
 	return nil
 }
 
@@ -509,7 +514,11 @@ func cmdSQL(args []string) error {
 	bindOnly := fs.Bool("bind-only", false, "parse+bind and print a summary (do not execute)")
 	doExplain := fs.Bool("explain", false, "print the physical plan instead of rows")
 	analyze := fs.Bool("analyze", false, "run the query and include scan stats in EXPLAIN")
-	asJSON := fs.Bool("json", false, "EXPLAIN as JSON")
+	asJSON := fs.Bool("json", false, "result JSON (or EXPLAIN JSON with --explain)")
+	eng := fs.String("engine", "vectorized", "vectorized|row")
+	jobs := fs.Int("jobs", 0, "parallel workers (0 = PRISM_PARALLELISM or GOMAXPROCS)")
+	noSkip := fs.Bool("no-skip", false, "disable row-group skipping (naive baseline)")
+	noPrune := fs.Bool("no-prune", false, "read all columns")
 	batch := fs.Int64("batch-size", parquetscan.DefaultBatchSize, "Arrow batch size")
 	if err := fs.Parse(flagsFirst(args)); err != nil {
 		return err
@@ -556,24 +565,46 @@ func cmdSQL(args []string) error {
 		fmt.Printf("project: %s\n", strings.Join(bound.Project, ", "))
 		return nil
 	}
-	node := plan.Build(boundInput(bound))
+	kind, err := engine.ParseKind(*eng)
+	if err != nil {
+		return err
+	}
+	opts := engine.Opts{
+		Catalog:   cat,
+		Engine:    kind,
+		Jobs:      *jobs,
+		BatchSize: *batch,
+		NoSkip:    *noSkip,
+		NoPrune:   *noPrune,
+	}
+	in := boundInput(bound)
+	in.NoSkip = *noSkip
+	in.NoPrune = *noPrune
 	if *doExplain && !*analyze {
+		node := plan.Build(in)
+		node.SetJobs(engine.ResolveJobs(*jobs))
 		return printExplain(node, *asJSON)
 	}
-	req := node.Request(*batch)
-	res, err := exec.Run(context.Background(), req)
+	res, err := engine.RunInput(context.Background(), in, opts)
 	if err != nil {
 		return err
 	}
 	defer res.Record.Release()
 	if *doExplain || *analyze {
-		node.AttachStats(res.Stats)
-		return printExplain(node, *asJSON)
+		return printExplain(res.Node, *asJSON)
+	}
+	if *asJSON {
+		b, err := res.JSON()
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(b))
+		return nil
 	}
 	printRecord(os.Stdout, res.Record, res.Record.NumRows())
-	st := res.Stats
-	fmt.Fprintf(os.Stderr, "\nsql: rows=%d groups=%d rows_read=%d batches=%d columns=%d row_groups_read=%d skipped=%d files=%d\n",
-		res.Record.NumRows(), res.Groups, st.RowsRead, st.BatchesEmitted, st.ColumnsRead, st.RowGroupsRead, st.RowGroupsSkipped, st.FilesOpened)
+	st := res.Profile
+	fmt.Fprintf(os.Stderr, "\nsql: engine=%s jobs=%d rows=%d groups=%d rows_read=%d columns=%d row_groups_read=%d skipped=%d elapsed_ms=%.2f\n",
+		st.Engine, st.Jobs, res.Record.NumRows(), res.Groups, st.RowsRead, st.ColumnsRead, st.RowGroupsRead, st.RowGroupsSkipped, st.ElapsedMs)
 	return nil
 }
 
@@ -598,6 +629,8 @@ func cmdExplain(args []string) error {
 	filePath := fs.String("file", "", "read SQL from a file")
 	analyze := fs.Bool("analyze", false, "execute and include bytes/rows")
 	asJSON := fs.Bool("json", false, "JSON plan")
+	eng := fs.String("engine", "vectorized", "vectorized|row")
+	jobs := fs.Int("jobs", 0, "parallel workers (0 = PRISM_PARALLELISM or GOMAXPROCS)")
 	batch := fs.Int64("batch-size", parquetscan.DefaultBatchSize, "Arrow batch size")
 	if err := fs.Parse(flagsFirst(args)); err != nil {
 		return err
@@ -625,16 +658,24 @@ func cmdExplain(args []string) error {
 	if err != nil {
 		return err
 	}
-	node := plan.Build(boundInput(bound))
-	if *analyze {
-		res, err := exec.Run(context.Background(), node.Request(*batch))
-		if err != nil {
-			return err
-		}
-		node.AttachStats(res.Stats)
-		res.Record.Release()
+	kind, err := engine.ParseKind(*eng)
+	if err != nil {
+		return err
 	}
-	return printExplain(node, *asJSON)
+	in := boundInput(bound)
+	if !*analyze {
+		node := plan.Build(in)
+		node.SetJobs(engine.ResolveJobs(*jobs))
+		return printExplain(node, *asJSON)
+	}
+	res, err := engine.RunInput(context.Background(), in, engine.Opts{
+		Catalog: cat, Engine: kind, Jobs: *jobs, BatchSize: *batch,
+	})
+	if err != nil {
+		return err
+	}
+	res.Record.Release()
+	return printExplain(res.Node, *asJSON)
 }
 
 func printExplain(node *plan.Node, asJSON bool) error {

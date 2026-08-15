@@ -4,7 +4,7 @@ This is the **canonical local setup** for Prism. The engine is meant to be devel
 
 Native PowerShell + Docker Desktop is first-class. WSL2 is optional.
 
-> **Status (Phase 0–7):** CLI `version` / `tables` / `describe` / `inspect` / `scan` / `agg` / `sql` / `explain` work. Row-group skipping is on. The Next.js workbench is not built yet.
+> **Status (Phase 0–9):** CLI `version` / `tables` / `describe` / `inspect` / `scan` / `agg` / `sql` / `explain` work. Dual engine (`--engine=vectorized|row`) and `--jobs` parallelism are on. The Next.js workbench is not built yet.
 
 ---
 
@@ -126,12 +126,14 @@ go run .\cmd\prism -- sql --data-dir testdata\tables "SELECT country, COUNT(*) F
 go run .\cmd\prism -- explain --data-dir testdata\tables --file testdata\sql\ok\q2.sql
 go run .\cmd\prism -- sql --data-dir testdata\tables --explain --file testdata\sql\ok\q2.sql
 go run .\cmd\prism -- explain --analyze --data-dir testdata\tables --file testdata\sql\ok\q2.sql
+go run .\cmd\prism -- sql --engine=row --jobs=1 --data-dir testdata\tables --file testdata\sql\ok\q1.sql
+go run .\cmd\prism -- sql --jobs=4 --data-dir testdata\tables --file testdata\sql\ok\q1.sql
 py -3 .\scripts\agg_oracle.py --data-dir testdata\tables
 ```
 
 The filter oracle uses PyArrow compute (not pandas) so `NULL > 0` stays unknown, matching the engine. After `go build -o prism.exe .\cmd\prism` you can run `.\prism.exe` with the same flags.
 
-SQL dialect: [docs/sql.md](sql.md).
+SQL dialect: [docs/sql.md](sql.md). `--engine=row` is the fair speedup baseline (same column prune and row-group skip as vectorized). `--jobs N` or `$env:PRISM_PARALLELISM` runs a worker per row group; each worker opens its own Parquet file handle (no shared Arrow reader lock). Without `ORDER BY`, result order is undefined.
 
 ### 4. Generate larger tables
 

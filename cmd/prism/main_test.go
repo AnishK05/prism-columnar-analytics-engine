@@ -178,3 +178,46 @@ func TestExplainQ2(t *testing.T) {
 		t.Fatalf("column list not pruned:\n%s", text)
 	}
 }
+
+func TestSQLEngineRowAndJSON(t *testing.T) {
+	dir := testdataTables(t)
+	oldOut, oldErr := os.Stdout, os.Stderr
+	defer func() { os.Stdout, os.Stderr = oldOut, oldErr }()
+	rOut, wOut, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rErr, wErr, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout, os.Stderr = wOut, wErr
+	runErr := run([]string{"sql", "--engine", "row", "--jobs", "1", "--data-dir", dir, "SELECT COUNT(*) FROM events"})
+	wOut.Close()
+	wErr.Close()
+	os.Stdout, os.Stderr = oldOut, oldErr
+	out, _ := io.ReadAll(rOut)
+	errb, _ := io.ReadAll(rErr)
+	if runErr != nil {
+		t.Fatalf("row: %v\n%s", runErr, errb)
+	}
+	if !strings.Contains(string(out), "8192") {
+		t.Fatalf("row COUNT out:\n%s", out)
+	}
+	if !strings.Contains(string(errb), "engine=row") {
+		t.Fatalf("stderr:\n%s", errb)
+	}
+
+	rOut, wOut, _ = os.Pipe()
+	os.Stdout, os.Stderr = wOut, oldErr
+	runErr = run([]string{"sql", "--json", "--jobs", "1", "--data-dir", dir, "SELECT COUNT(*) FROM events"})
+	wOut.Close()
+	os.Stdout = oldOut
+	out, _ = io.ReadAll(rOut)
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	if !strings.Contains(string(out), `"engine": "vectorized"`) || !strings.Contains(string(out), "8192") {
+		t.Fatalf("json:\n%s", out)
+	}
+}

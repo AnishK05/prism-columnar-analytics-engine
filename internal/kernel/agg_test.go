@@ -76,6 +76,43 @@ func TestHashAggGroupCountSum(t *testing.T) {
 	}
 }
 
+func TestHashAggMerge(t *testing.T) {
+	a := recCountryAmount([]string{"US", "CA"}, []int64{10, 5}, nil)
+	defer a.Release()
+	b := recCountryAmount([]string{"US", "CA", "US"}, []int64{20, 7, 0}, nil)
+	defer b.Release()
+	specs := []AggSpec{
+		{Fn: AggCountStar, Name: "count"},
+		{Fn: AggSum, Input: "amount_cents", Name: "sum_amount_cents"},
+	}
+	h1, _ := NewHashAgg([]string{"country"}, specs)
+	h2, _ := NewHashAgg([]string{"country"}, specs)
+	if err := h1.Add(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := h2.Add(b); err != nil {
+		t.Fatal(err)
+	}
+	if err := h1.Merge(h2); err != nil {
+		t.Fatal(err)
+	}
+	out, err := h1.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Release()
+	got := map[string][2]int64{}
+	for i := 0; i < int(out.NumRows()); i++ {
+		got[out.Column(0).(*array.String).Value(i)] = [2]int64{
+			out.Column(1).(*array.Int64).Value(i),
+			out.Column(2).(*array.Int64).Value(i),
+		}
+	}
+	if got["US"] != [2]int64{3, 30} || got["CA"] != [2]int64{2, 12} {
+		t.Fatalf("%v", got)
+	}
+}
+
 func TestHashAggNullSkipAndScalarCount(t *testing.T) {
 	rec := recCountryAmount([]string{"US", "US"}, []int64{10, 0}, []bool{true, false})
 	defer rec.Release()

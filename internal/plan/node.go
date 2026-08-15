@@ -30,6 +30,8 @@ type Input struct {
 	Order    []kernel.OrderKey
 	Limit    int64
 	IsAgg    bool
+	NoSkip   bool
+	NoPrune  bool
 }
 
 // Node is one operator. Children are nested (unary pipeline).
@@ -58,14 +60,24 @@ type Node struct {
 	BytesRead        int64
 	RowsRead         int64
 	Analyze          bool
+	Jobs             int
 }
 
 // Build constructs Scan→Filter→Agg/Project→Sort→Limit and applies optimizer rules.
 func Build(in Input) *Node {
 	n := buildLogical(in)
 	n = optimize(n, in)
-	applySkip(n)
+	if !in.NoSkip {
+		applySkip(n)
+	}
 	return n
+}
+
+// SetJobs records the worker count on every node (shown in EXPLAIN).
+func (n *Node) SetJobs(j int) {
+	for cur := n; cur != nil; cur = cur.Child {
+		cur.Jobs = j
+	}
 }
 
 func buildLogical(in Input) *Node {

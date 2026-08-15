@@ -212,6 +212,15 @@ func pruneColumns(n *Node, in Input) *Node {
 	if scan == nil || scan.TableRef == nil {
 		return n
 	}
+	if in.NoPrune {
+		names := make([]string, 0, len(scan.TableRef.Fields))
+		for _, f := range scan.TableRef.Fields {
+			names = append(names, f.Name)
+		}
+		scan.Keep = names
+		scan.PrunedCols = 0
+		return n
+	}
 	keep := map[string]struct{}{}
 	add := func(cols []string) {
 		for _, c := range cols {
