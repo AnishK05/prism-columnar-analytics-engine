@@ -7,13 +7,15 @@ A miniature **vectorized, single-node OLAP engine** for learning how analytical 
 Blueprint: **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)** (decisions locked in §20).  
 Interview script (fill after measurement): **[WRITEUP.md](./WRITEUP.md)**.
 
-## What’s here now (Phase 0–5)
+## What’s here now (Phase 0–7)
 
 - `prism tables` / `prism describe` — catalog with cached row-group min/max (zone maps)
 - `prism inspect` / `prism scan` — Parquet → Arrow, column pruning
-- `prism scan --where` — vectorized filter (SQL three-valued logic)
+- `prism scan --where` — vectorized filter (SQL three-valued logic) with row-group skipping
 - `prism agg` — hash aggregate (`COUNT`/`SUM`/`AVG`/`MIN`/`MAX`), sort, limit
 - `prism sql` — Prism SQL lexer/parser/binder + the same pipeline ([docs/sql.md](docs/sql.md))
+- `prism explain` — physical plan (text or JSON); `--analyze` adds bytes/rows
+- Row-group skipping from Parquet min/max (zone maps); Q2 on the fixture keeps 1 of 4 groups
 - Python generator for synthetic `events` / `users` / `products`
 - Committed fixture: `testdata/tables` (8,192 `events` rows, `ts` clustered)
 
@@ -22,11 +24,12 @@ go test ./...
 go run ./cmd/prism tables --data-dir testdata/tables
 go run ./cmd/prism agg --data-dir testdata/tables --table events --group country --agg 'count,sum(amount_cents)' --order count --desc --limit 10
 go run ./cmd/prism sql --data-dir testdata/tables "SELECT country, COUNT(*) FROM events GROUP BY country ORDER BY COUNT(*) DESC LIMIT 5"
+go run ./cmd/prism explain --data-dir testdata/tables --file testdata/sql/ok/q2.sql
 ```
 
 On Windows PowerShell, use `.\` paths; see `docs/WINDOWS.md`.
 
-The Next.js workbench, EXPLAIN, and row-group skipping are not implemented yet.
+The Next.js workbench is not implemented yet.
 
 ## Resume line (placeholders — rewrite after Phase 11)
 
@@ -51,4 +54,6 @@ Pinned `github.com/apache/arrow-go/v18 v18.0.0` so Go 1.22 works. Newer Arrow Go
 | 3 | Vectorized `--where` filters | Done |
 | 4 | Hash aggregate, sort, limit | Done |
 | 5 | SQL lexer / parser / binder | Done |
-| 6+ | Planner, skipping, dual engine, UI | Not started |
+| 6 | Planner, optimizer, EXPLAIN | Done |
+| 7 | Row-group skipping (zone maps) | Done |
+| 8+ | Dual engine, parallelism, UI | Not started |

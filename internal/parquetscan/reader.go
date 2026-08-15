@@ -22,6 +22,9 @@ type Options struct {
 	BatchSize int64
 	// Alloc is used for Arrow buffers. Nil uses memory.DefaultAllocator.
 	Alloc memory.Allocator
+	// RowGroups maps file path → row-group indices to read.
+	// A nil map means read every row group. An empty slice for a file skips it.
+	RowGroups map[string][]int
 }
 
 func (o Options) batchSize() int64 {
@@ -38,15 +41,33 @@ func (o Options) alloc() memory.Allocator {
 	return memory.DefaultAllocator
 }
 
+func (o Options) keptGroups(path string) []int {
+	if o.RowGroups == nil {
+		return nil // all
+	}
+	kept, ok := o.RowGroups[path]
+	if !ok {
+		return nil
+	}
+	out := append([]int(nil), kept...)
+	if out == nil {
+		out = []int{}
+	}
+	return out
+}
+
 // Stats are populated as a scan runs.
 type Stats struct {
-	FilesOpened     int
-	RowGroupsRead   int
-	RowsRead        int64
-	BatchesEmitted  int
-	ColumnsRead     int
-	CompressedBytes int64 // on-disk size of selected column chunks
-	ColumnNames     []string
+	FilesOpened      int
+	FilesTotal       int
+	RowGroupsRead    int
+	RowGroupsTotal   int
+	RowGroupsSkipped int
+	RowsRead         int64
+	BatchesEmitted   int
+	ColumnsRead      int
+	CompressedBytes  int64 // on-disk size of selected column chunks that were read
+	ColumnNames      []string
 }
 
 // Reader streams Arrow records from one or more Parquet files.
@@ -73,6 +94,7 @@ func Open(ctx context.Context, files []string, opts Options) (*Reader, error) {
 		return nil, fmt.Errorf("no parquet files")
 	}
 	r := &Reader{files: files, opts: opts}
+	r.stats.FilesTotal = len(files)
 	if err := r.openFile(ctx, 0); err != nil {
 		r.Close()
 		return nil, err
@@ -81,51 +103,97 @@ func Open(ctx context.Context, files []string, opts Options) (*Reader, error) {
 }
 
 func (r *Reader) openFile(ctx context.Context, i int) error {
-	r.closeCurrent()
-	if i >= len(r.files) {
-		r.eof = true
-		return nil
-	}
-	path := r.files[i]
-	pf, err := file.OpenParquetFile(path, false)
-	if err != nil {
-		return fmt.Errorf("open parquet %s: %w", path, err)
-	}
-	r.closers = append(r.closers, pf)
-
-	props := pqarrow.ArrowReadProperties{BatchSize: r.opts.batchSize()}
-	ar, err := pqarrow.NewFileReader(pf, props, r.opts.alloc())
-	if err != nil {
-		return fmt.Errorf("arrow reader %s: %w", path, err)
-	}
-	schema, err := ar.Schema()
-	if err != nil {
-		return err
-	}
-	if r.schema == nil {
-		r.schema = schema
-		idx, err := columnIndices(schema, r.opts.Columns)
+	for {
+		r.closeCurrent()
+		if i >= len(r.files) {
+			r.eof = true
+			return nil
+		}
+		path := r.files[i]
+		pf, err := file.OpenParquetFile(path, false)
 		if err != nil {
+			return fmt.Errorf("open parquet %s: %w", path, err)
+		}
+		nrg := pf.NumRowGroups()
+		r.stats.RowGroupsTotal += nrg
+		kept := r.opts.keptGroups(path)
+		if kept != nil && len(kept) == 0 {
+			if r.schema == nil {
+				props := pqarrow.ArrowReadProperties{BatchSize: r.opts.batchSize()}
+				ar, err := pqarrow.NewFileReader(pf, props, r.opts.alloc())
+				if err != nil {
+					pf.Close()
+					return fmt.Errorf("arrow reader %s: %w", path, err)
+				}
+				schema, err := ar.Schema()
+				if err != nil {
+					pf.Close()
+					return err
+				}
+				r.schema = schema
+				idx, err := columnIndices(schema, r.opts.Columns)
+				if err != nil {
+					pf.Close()
+					return err
+				}
+				r.indices = idx
+				r.stats.ColumnsRead = schema.NumFields()
+				if idx != nil {
+					r.stats.ColumnsRead = len(idx)
+				}
+				r.stats.ColumnNames = selectedNames(schema, idx)
+			}
+			r.stats.RowGroupsSkipped += nrg
+			pf.Close()
+			i++
+			continue
+		}
+
+		props := pqarrow.ArrowReadProperties{BatchSize: r.opts.batchSize()}
+		ar, err := pqarrow.NewFileReader(pf, props, r.opts.alloc())
+		if err != nil {
+			pf.Close()
+			return fmt.Errorf("arrow reader %s: %w", path, err)
+		}
+		schema, err := ar.Schema()
+		if err != nil {
+			pf.Close()
 			return err
 		}
-		r.indices = idx
-		r.stats.ColumnsRead = schema.NumFields()
-		if idx != nil {
-			r.stats.ColumnsRead = len(idx)
+		if r.schema == nil {
+			r.schema = schema
+			idx, err := columnIndices(schema, r.opts.Columns)
+			if err != nil {
+				pf.Close()
+				return err
+			}
+			r.indices = idx
+			r.stats.ColumnsRead = schema.NumFields()
+			if idx != nil {
+				r.stats.ColumnsRead = len(idx)
+			}
+			r.stats.ColumnNames = selectedNames(schema, idx)
 		}
-		r.stats.ColumnNames = selectedNames(schema, idx)
-	}
 
-	rr, err := ar.GetRecordReader(ctx, r.indices, nil)
-	if err != nil {
-		return fmt.Errorf("record reader %s: %w", path, err)
+		rr, err := ar.GetRecordReader(ctx, r.indices, kept)
+		if err != nil {
+			pf.Close()
+			return fmt.Errorf("record reader %s: %w", path, err)
+		}
+		r.closers = append(r.closers, pf)
+		r.cur = rr
+		r.fileIdx = i
+		r.stats.FilesOpened++
+		if kept == nil {
+			r.stats.RowGroupsRead += nrg
+			r.stats.CompressedBytes += selectedCompressedBytes(pf, r.indices, nil)
+		} else {
+			r.stats.RowGroupsRead += len(kept)
+			r.stats.RowGroupsSkipped += nrg - len(kept)
+			r.stats.CompressedBytes += selectedCompressedBytes(pf, r.indices, kept)
+		}
+		return nil
 	}
-	r.cur = rr
-	r.fileIdx = i
-	r.stats.FilesOpened++
-	r.stats.RowGroupsRead += pf.NumRowGroups()
-	r.stats.CompressedBytes += selectedCompressedBytes(pf, r.indices)
-	return nil
 }
 
 func selectedNames(schema *arrow.Schema, idx []int) []string {
@@ -143,20 +211,31 @@ func selectedNames(schema *arrow.Schema, idx []int) []string {
 	return names
 }
 
-func selectedCompressedBytes(pf *file.Reader, idx []int) int64 {
+func selectedCompressedBytes(pf *file.Reader, idx []int, rowGroups []int) int64 {
 	meta := pf.MetaData()
 	var total int64
-	want := map[int]struct{}{}
+	wantCol := map[int]struct{}{}
 	if idx != nil {
 		for _, c := range idx {
-			want[c] = struct{}{}
+			wantCol[c] = struct{}{}
+		}
+	}
+	wantRG := map[int]struct{}{}
+	if rowGroups != nil {
+		for _, g := range rowGroups {
+			wantRG[g] = struct{}{}
 		}
 	}
 	for i := 0; i < pf.NumRowGroups(); i++ {
+		if rowGroups != nil {
+			if _, ok := wantRG[i]; !ok {
+				continue
+			}
+		}
 		rg := meta.RowGroup(i)
 		for c := 0; c < rg.NumColumns(); c++ {
 			if idx != nil {
-				if _, ok := want[c]; !ok {
+				if _, ok := wantCol[c]; !ok {
 					continue
 				}
 			}

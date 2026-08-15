@@ -25,6 +25,10 @@ type Request struct {
 	Order     []kernel.OrderKey
 	Limit     int64 // 0 = no SQL limit
 	BatchSize int64
+	// RowGroups maps file path → row-group indices to read (nil = all).
+	RowGroups map[string][]int
+	// Empty is a constant-false plan: return a 0-row result without scanning pages.
+	Empty bool
 }
 
 // Result is one output record plus scan stats.
@@ -61,9 +65,18 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		scanCols = []string{req.Table.Fields[0].Name}
 	}
 
+	rowGroups := req.RowGroups
+	if req.Empty {
+		rowGroups = map[string][]int{}
+		for _, f := range req.Table.Files {
+			rowGroups[f] = []int{}
+		}
+	}
+
 	rdr, err := parquetscan.Open(ctx, req.Table.Files, parquetscan.Options{
 		Columns:   scanCols,
 		BatchSize: req.BatchSize,
+		RowGroups: rowGroups,
 	})
 	if err != nil {
 		return nil, err

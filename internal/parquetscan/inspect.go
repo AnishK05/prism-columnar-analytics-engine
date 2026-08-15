@@ -74,6 +74,46 @@ func (b Bound) String() string {
 	}
 }
 
+// Cmp compares two bounds of the same kind. Returns -1, 0, 1.
+func (a Bound) Cmp(b Bound) (int, error) {
+	if a.Kind != b.Kind {
+		return 0, fmt.Errorf("incomparable stats %v vs %v", a.Kind, b.Kind)
+	}
+	switch a.Kind {
+	case BoundInt64:
+		switch {
+		case a.I64 < b.I64:
+			return -1, nil
+		case a.I64 > b.I64:
+			return 1, nil
+		default:
+			return 0, nil
+		}
+	case BoundFloat64:
+		switch {
+		case a.F64 < b.F64:
+			return -1, nil
+		case a.F64 > b.F64:
+			return 1, nil
+		default:
+			return 0, nil
+		}
+	case BoundBytes:
+		return strings.Compare(string(a.Bytes), string(b.Bytes)), nil
+	case BoundBool:
+		ai, bi := 0, 0
+		if a.Bool {
+			ai = 1
+		}
+		if b.Bool {
+			bi = 1
+		}
+		return ai - bi, nil
+	default:
+		return 0, fmt.Errorf("empty bound")
+	}
+}
+
 // ColumnChunkInfo is per-column-chunk footer stats.
 type ColumnChunkInfo struct {
 	Name            string

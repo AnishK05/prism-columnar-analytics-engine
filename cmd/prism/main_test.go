@@ -35,6 +35,9 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(buf.String(), "agg") || !strings.Contains(buf.String(), "sql") {
 		t.Fatal("help should mention agg and sql")
 	}
+	if !strings.Contains(buf.String(), "explain") {
+		t.Fatal("help should mention explain")
+	}
 }
 
 func TestFlagsFirst(t *testing.T) {
@@ -140,5 +143,38 @@ func TestAggAndSQLTestdata(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "8192") {
 		t.Fatalf("sql COUNT(*) out:\n%s\nstderr:%s", out, errb)
+	}
+}
+
+func TestExplainQ2(t *testing.T) {
+	dir := testdataTables(t)
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("caller")
+	}
+	q2 := filepath.Join(filepath.Dir(file), "..", "..", "testdata", "sql", "ok", "q2.sql")
+	oldOut, oldErr := os.Stdout, os.Stderr
+	defer func() { os.Stdout, os.Stderr = oldOut, oldErr }()
+	rOut, wOut, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout, os.Stderr = wOut, os.Stderr
+	runErr := run([]string{"explain", "--data-dir", dir, "--file", q2})
+	wOut.Close()
+	os.Stdout = oldOut
+	out, _ := io.ReadAll(rOut)
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	text := string(out)
+	if !strings.Contains(text, "pushed=") || !strings.Contains(text, "ts") {
+		t.Fatalf("expected pushed ts:\n%s", text)
+	}
+	if !strings.Contains(text, "kept_row_groups=1") || !strings.Contains(text, "skipped=3") {
+		t.Fatalf("expected skip counts:\n%s", text)
+	}
+	if strings.Contains(text, "event_type") || strings.Contains(text, "session_id") {
+		t.Fatalf("column list not pruned:\n%s", text)
 	}
 }

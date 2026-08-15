@@ -4,7 +4,7 @@ This is the **canonical local setup** for Prism. The engine is meant to be devel
 
 Native PowerShell + Docker Desktop is first-class. WSL2 is optional.
 
-> **Status (Phase 0–5):** CLI `version` / `tables` / `describe` / `inspect` / `scan` / `agg` / `sql` work. EXPLAIN, row-group skipping, and the Next.js workbench are not built yet.
+> **Status (Phase 0–7):** CLI `version` / `tables` / `describe` / `inspect` / `scan` / `agg` / `sql` / `explain` work. Row-group skipping is on. The Next.js workbench is not built yet.
 
 ---
 
@@ -123,6 +123,9 @@ go run .\cmd\prism -- scan --data-dir testdata\tables --table events --where "am
 py -3 .\scripts\filter_oracle.py --data-dir testdata\tables --expect 30
 go run .\cmd\prism -- agg --data-dir testdata\tables --table events --group country --agg "count,sum(amount_cents)" --order count --desc --limit 10
 go run .\cmd\prism -- sql --data-dir testdata\tables "SELECT country, COUNT(*) FROM events GROUP BY country ORDER BY COUNT(*) DESC LIMIT 5"
+go run .\cmd\prism -- explain --data-dir testdata\tables --file testdata\sql\ok\q2.sql
+go run .\cmd\prism -- sql --data-dir testdata\tables --explain --file testdata\sql\ok\q2.sql
+go run .\cmd\prism -- explain --analyze --data-dir testdata\tables --file testdata\sql\ok\q2.sql
 py -3 .\scripts\agg_oracle.py --data-dir testdata\tables
 ```
 
@@ -167,7 +170,6 @@ Stop later with `docker compose down`.
 | Next.js workbench | Phase 13 |
 | `verify_against_postgres.py` | Phase 10 |
 | `prism bench` | Phase 11 |
-| EXPLAIN / row-group skipping | Phase 6–7 |
 
 ---
 
