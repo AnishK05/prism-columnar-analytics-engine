@@ -75,6 +75,9 @@ func (n *Node) writeText(b *strings.Builder, indent int) {
 		if n.Limit > 0 {
 			fmt.Fprintf(b, "%s  limit_pushdown=%d\n", pad, n.Limit)
 		}
+		if n.Jobs > 1 {
+			fmt.Fprintf(b, "%s  jobs=%d\n", pad, n.Jobs)
+		}
 		if n.Analyze {
 			fmt.Fprintf(b, "%s  bytes_read=%s  rows_in=%d\n", pad, parquetscan.FormatBytes(n.BytesRead), n.RowsRead)
 		}
@@ -115,6 +118,7 @@ type JSONNode struct {
 	PrunedCols       int       `json:"pruned_cols,omitempty"`
 	BytesRead        int64     `json:"bytes_read,omitempty"`
 	RowsIn           int64     `json:"rows_in,omitempty"`
+	Jobs             int       `json:"jobs,omitempty"`
 	Child            *JSONNode `json:"child,omitempty"`
 }
 
@@ -148,6 +152,7 @@ func (n *Node) JSON() *JSONNode {
 		j.KeptRowGroups = n.RowGroupsKept
 		j.SkippedRowGroups = n.RowGroupsSkipped
 		j.PrunedCols = n.PrunedCols
+		j.Jobs = n.Jobs
 		if n.Analyze {
 			j.BytesRead = n.BytesRead
 			j.RowsIn = n.RowsRead
