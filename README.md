@@ -2,25 +2,30 @@
 
 A miniature **vectorized, single-node OLAP engine** for learning how analytical databases actually work: Parquet on disk, Apache Arrow in memory, predicate pushdown, column pruning, row-group skipping, and a batched execution pipeline.
 
-This repository is in the **planning stage**. The engine is not implemented yet.
+**Windows is the supported local setup.** Follow **[docs/WINDOWS.md](docs/WINDOWS.md)** (native PowerShell + Docker Desktop; WSL is optional).
 
-**Read this first:** [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)
+Blueprint: **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)** (decisions locked in §20).  
+Interview script (fill after measurement): **[WRITEUP.md](./WRITEUP.md)**.
 
-That document is the project blueprint: scope, architecture, SQL dialect, dataset, optimizer, phased build order, benchmarking rules, and open questions.
+The engine is **not implemented yet**. Implementation starts at Phase 0 of the plan.
 
-## Resume target (numbers TBD by measurement)
+## Resume line (placeholders — rewrite after Phase 11)
 
 > Engineered a vectorized, single-node OLAP engine in Go querying Parquet via Apache Arrow, with predicate pushdown, column pruning, and row-group skipping, sustaining 100M+ rows/query at 10x a row-at-a-time baseline
 
-## Stack (planned)
+Those numbers are a direction, not a quota. Measure on this laptop, name the query and baseline, then replace.
 
-Go · Apache Arrow · Apache Parquet · PostgreSQL (correctness oracle) · Python/NumPy/PyArrow · Next.js/TypeScript · Docker
+## Stack (locked)
+
+Go · Apache Arrow · Apache Parquet · PostgreSQL (correctness oracle only) · Python / NumPy / PyArrow · Next.js / TypeScript · Docker Desktop
+
+No DuckDB, no joins, no INSERT SQL, no license file in v1. Dataset is synthetic `events`.
 
 ## Status
 
 | Phase | Description | State |
 |---|---|---|
-| Plan | Detailed implementation plan | In review |
+| Plan | Blueprint + Windows runbook | Locked |
 | v1 engine | Scan / filter / agg SQL over Parquet | Not started |
-| Bench | 100M-row PrismBench + dual executor | Not started |
-| UI | Query workbench + plan visualizer | Not started |
+| Bench | Laptop-scale PrismBench + dual executor | Not started |
+| UI | Three-page workbench | Not started |

@@ -4,11 +4,15 @@
 
 This document is the working blueprint for **Prism**: a miniature, single-node OLAP engine. The goal is not to compete with DuckDB or ClickHouse. The goal is to *build enough of a real analytical engine* that you can explain, demonstrate, and benchmark the internals that those systems are built on.
 
-**Resume target (tunable, must stay honest):**
+**Decisions in §20 are locked.** Implementation PRs follow this plan and check boxes in §18. Do not expand the SQL dialect or add DuckDB/joins until v1 is done.
+
+**Primary development machine: a personal Windows laptop.** There is no cloud/demo box. Native Windows is first-class (PowerShell + Docker Desktop). WSL2 is optional, not required. The runbook is [`docs/WINDOWS.md`](docs/WINDOWS.md).
+
+**Resume target (placeholder numbers — replace after Phase 11):**
 
 > Engineered a vectorized, single-node OLAP engine in Go querying Parquet via Apache Arrow, with predicate pushdown, column pruning, and row-group skipping, sustaining 100M+ rows/query at 10x a row-at-a-time baseline
 
-Treat that sentence as a *product spec*, not marketing. Every phase below exists to make that sentence true, measurable, and defensible in an interview.
+Those figures are a *direction*, not a quota. Design the system, measure on this Windows machine, then rewrite the bullet with the real scale, the named query, and the named baseline. A correct 20M-row demo with a documented 6x beats an OOM at 100M.
 
 ---
 
@@ -20,13 +24,13 @@ Build a query engine that:
 2. Executes a useful **SQL subset** over those tables.
 3. Uses **Apache Arrow RecordBatches** as the in-memory execution format (columnar in RAM).
 4. Runs a **vectorized** operator pipeline (thousands of rows per call, not one).
-5. Applies three storage-aware optimizations that actually matter at 100M+ rows:
+5. Applies three storage-aware optimizations that actually matter on large scans:
    - **column pruning**
    - **predicate pushdown**
    - **row-group skipping** using Parquet min/max statistics
-6. Ships a **row-at-a-time baseline executor** so the 10x claim is an apples-to-apples measurement on the *same engine*, not a vibes comparison to PostgreSQL.
-7. Checks **correctness** against PostgreSQL (and optionally DuckDB/pandas) on the same SQL.
-8. Exposes a small **HTTP API + Next.js workbench** so you can type SQL, see the physical plan, see which row groups were skipped, and look at timings.
+6. Ships a **row-at-a-time baseline executor** so the speedup claim is an apples-to-apples measurement on the *same engine*, not a vibes comparison to PostgreSQL.
+7. Checks **correctness** against PostgreSQL on the same SQL (oracle only — not a published competitor). Optional pandas checks in Python tests are fine. **No DuckDB in v1.**
+8. Exposes a small **HTTP API + thin Next.js workbench** so you can type SQL, see the physical plan, see which row groups were skipped, and look at timings.
 
 If a feature does not make (1)–(8) stronger, it is stretch or out of scope.
 
@@ -67,17 +71,19 @@ Interview framing: “I built a baby Snowflake/DuckDB scan-and-agg engine so I w
 - Local filesystem Parquet tables. One table = one directory of `.parquet` files (Hive-style optional later).
 - SQL subset documented in §6.
 - Vectorized operators: `Scan`, `Filter`, `Project`, `HashAggregate`, `OrderBy`, `Limit`.
-- Naive row-at-a-time executor for the *same* logical plans (the 10x baseline).
+- Naive row-at-a-time executor for the *same* logical plans (the speedup baseline).
 - Optimizer: column pruning, predicate pushdown, row-group skipping. Optional: simple filter reordering.
 - Aggregates: `COUNT`, `COUNT(*)`, `SUM`, `AVG`, `MIN`, `MAX`.
 - `GROUP BY` on 1–3 columns (typed keys: int64, string, date/timestamp, bool).
 - `EXPLAIN` / `EXPLAIN ANALYZE` with per-operator timing, rows in/out, bytes read, row groups skipped.
-- Python data generator (NumPy / PyArrow) that can emit 100M+ row fact tables.
-- PostgreSQL as a **correctness oracle** (same SQL, compare results).
-- Docker Compose for Postgres + engine + web UI.
-- Next.js query workbench: editor, results grid, plan visualizer, benchmark page.
+- Python data generator (NumPy / PyArrow) that can emit laptop-scale fact tables (10M–100M, whatever fits).
+- PostgreSQL as a **correctness oracle only** (same SQL, compare results). Not a UI benchmark competitor in v1.
+- Docker Compose for Postgres (oracle) + engine + web UI. Works with **Docker Desktop on Windows**.
+- Thin Next.js query workbench (three pages): editor, plan visualizer, benchmark page (vectorized vs row).
 - Benchmark harness with a small suite of named queries (PrismBench Q1–Q8).
 - Tests: parser, planner, optimizer rewrites, operator correctness, golden SQL results.
+- Windows-first local workflow: PowerShell helpers + Python/Go/npm commands. Makefile is optional convenience for CI/Linux, never the only entry point.
+- `WRITEUP.md` (interview script, filled after measurement) and `docs/WINDOWS.md` (how to run on Windows).
 
 ### 3.2 Stretch (v1.5 — only after v1 is fast and correct)
 
@@ -87,7 +93,8 @@ Interview framing: “I built a baby Snowflake/DuckDB scan-and-agg engine so I w
 - Spill-to-disk for aggregations that exceed a memory budget.
 - Partition directories (`date=2024-01-01/...`) and partition pruning.
 - Simple cost-based choices (e.g. broadcast vs build side — only relevant once joins exist).
-- DuckDB as a *second* baseline in the bench suite (very educational, not required).
+- DuckDB as a *second* baseline (explicitly deferred; easy to demoralize v1).
+- NYC Taxi or mini-TPC-H as a second dataset after the synthetic `events` table works.
 
 ### 3.3 Out of scope (do not build)
 
@@ -99,8 +106,11 @@ Interview framing: “I built a baby Snowflake/DuckDB scan-and-agg engine so I w
 - SIMD kernels written in assembly, GPU, JIT (Cranelift/LLVM).
 - Auth, multi-tenancy, a real catalog service, object storage as a hard dependency.
 - Matching DuckDB or Postgres on *every* query. We win on *scan + filter + group-by* over Parquet. That is the point.
-
-> **Open question:** Are inner hash joins part of the resume-worthy core, or stretch? Recommendation: **stretch**. Scan/filter/agg is enough to make the 10x claim and teach the important internals. Joins are a second project’s worth of hash-table, build/probe, and memory-spill work. Include a *schema that could support joins* (dimension tables generated) so adding them later is natural.
+- **Joins in v1.** Inner hash joins are stretch. Still generate `users` and `products` so adding joins later is natural.
+- **INSERT / UPDATE / DELETE SQL.** The generator writes Parquet; `prism register` (or a data-dir walk) is enough. No write-path SQL.
+- **A license file.** Skip SPDX/MIT/etc. unless you later want one.
+- **DuckDB** in the bench suite or UI.
+- **WSL as a hard requirement.** Native Windows must work.
 
 ---
 
@@ -108,28 +118,20 @@ Interview framing: “I built a baby Snowflake/DuckDB scan-and-agg engine so I w
 
 | Piece | Choice | Why |
 |---|---|---|
-| Engine language | **Go** | Matches the resume line. Fast enough, excellent goroutines for parallel scans, official Apache Arrow Go, faster iteration than Rust for an undergrad timeline. |
+| Engine language | **Go** (locked) | Official Apache Arrow Go, fast iteration, goroutines for parallel scans. Do not rewrite in Rust. |
 | In-memory format | **Apache Arrow** (`apache/arrow-go`) | Industry-standard columnar batches; zero-copy-ish handoff from Parquet; the whole point of “vectorized.” |
 | On-disk format | **Apache Parquet** | Row groups + column chunks + page stats are *the* teaching vehicle for pruning/skipping/pushdown. |
 | SQL parser | **Hand-rolled recursive descent for a tiny dialect** | You learn query compilation. A Vitess/TiDB parser hides that and pulls in a huge surface you will not execute. |
-| Correctness oracle | **PostgreSQL 16** in Docker | Interview-friendly: “I validated results against Postgres.” |
-| Data generation / extra checks | **Python 3 + NumPy + PyArrow** | Generate Parquet identically to what the engine reads; optional pandas/DuckDB cross-check. |
+| Correctness oracle | **PostgreSQL 16** in Docker Desktop | Interview-friendly: “I validated results against Postgres.” Not a storage engine and not a UI competitor in v1. |
+| Data generation | **Python 3 + NumPy + PyArrow** | Generate Parquet identically to what the engine reads. Pandas for tiny oracle checks is fine. No DuckDB. |
 | API | **Go `net/http`** (stdlib or a thin chi/echo) | `POST /query`, `POST /explain`, `GET /tables`. |
-| UI | **Next.js + TypeScript** | Query workbench + plan viz + charts. Keep it thin. |
-| Charts | **Recharts** (or Chart.js) | Benchmark bars: vectorized vs row-at-a-time vs Postgres. |
-| Containerization | **Docker Compose** | One-command demo: generate data, boot engine, boot UI, boot Postgres. |
-| Bench / CI | **Go tests + a `make bench`** | Reproducible numbers; store a results JSON the UI can plot. |
+| UI | **Next.js + TypeScript** (thin, three pages) | Query workbench + plan viz + vectorized-vs-row charts. |
+| Charts | **Recharts** (or Chart.js) | Benchmark bars: vectorized vs row-at-a-time. |
+| Containerization | **Docker Desktop + Compose** | Postgres oracle, optional full stack. Must work on Windows. |
+| Local DX | **PowerShell scripts + raw `go`/`py`/`npm`** | Makefile optional for CI. See `docs/WINDOWS.md`. |
+| Bench / CI | **Go tests + `prism bench`** | Reproducible JSON the UI can plot. |
 
-**Go vs Rust.** Rust would be a slightly more “systems” flex (memory, SIMD, no GC pauses) and is what DuckDB-adjacent people expect. It is also slower to get a parser + HTTP + UI glue working, and Arrow/Parquet in Rust (`arrow-rs`) has a steeper API. **Default: Go.** If you specifically want Rust intern-signal, switch before Phase 1 — do not rewrite later.
-
-> **Open question:** Confirm **Go** as the engine language (recommended, matches resume) vs **Rust**. This is the one decision that is expensive to reverse.
-
-**PostgreSQL’s role.** Postgres is **not** the storage engine. Prism never queries Postgres at runtime for user SQL. Postgres is:
-
-1. A correctness oracle in tests (`scripts/verify_against_postgres.py`).
-2. An optional *external* baseline in the benchmark page, with a huge caveat: Postgres will be row-oriented heap scans unless we also load `pg_columnar` / `cstore` / `parquet_fdw`, which we will **not** do in v1. Comparing a specialized Parquet scanner to vanilla Postgres is directionally interesting and interview-useful if you *say the comparison is unfair in Postgres’s favor on OLTP and unfair in Prism’s favor on analytics*. The **10x number on the resume must come from Prism-vectorized vs Prism-row-at-a-time**, not vs Postgres.
-
-> **Open question:** Do you want Postgres as oracle-only (recommended), or also as a published benchmark competitor in the UI? Recommendation: oracle always; competitor as a clearly labeled “external baseline.”
+**PostgreSQL’s role (locked: oracle-only).** Postgres is **not** the storage engine. Prism never queries Postgres at runtime for user SQL. Use it in `scripts/verify_against_postgres.py` on `tiny`/`dev`. Do not put Postgres bars on the bench page in v1 — that comparison is unfair both ways and the resume speedup is **Prism-vectorized vs Prism-row-at-a-time**. Adding a labeled “external baseline” later is allowed; it is not v1.
 
 ---
 
@@ -268,7 +270,7 @@ LIMIT 20;
 
 That single pattern exercises scan, prune, pushdown, skip, vectorized filter, hash agg, sort, and limit. Write 8 variations of it and you have a benchmark suite.
 
-> **Open question:** Any must-have SQL you want in v1 that is missing (`HAVING`, `CASE`, date trunc, joins)? Recommendation: none of those in v1. Add `date_trunc('day', ts)` later if the UI demos feel weak — it is a nice grouping key.
+**Dialect is frozen for v1.** No `HAVING`, `CASE`, `date_trunc`, `DISTINCT`, or joins until §18 is checked. Reject them with a clear parser/binder error (`JOIN not supported in v1`). If the workbench demo later feels weak without day buckets, `date_trunc` is the first additive function — still not v1.
 
 ---
 
@@ -278,7 +280,7 @@ Do **not** start by downloading a random CSV. Generate a dataset whose statistic
 
 ### 7.1 Tables
 
-**`events`** — fact table, the 100M+ row star. Rough schema:
+**`events`** — fact table, the large star. Rough schema:
 
 | column | type | notes |
 |---|---|---|
@@ -307,18 +309,26 @@ Do **not** start by downloading a random CSV. Generate a dataset whose statistic
 
 Why sorted `ts`? So `WHERE ts >= X AND ts < Y` skips most row groups. If timestamps are random, skipping demos look fake and speedups collapse. Call this out in the writeup — it is how real warehouses cluster data (Snowflake micro-partitions, BigQuery date partitioning, Spark `SORT BY`).
 
-### 7.3 Scale targets
+### 7.3 Scale targets (replaceable — laptop decides)
+
+There is **no external hardware**. Everything runs on the same Windows PC that develops the project. Do not chase 100M or 10x as a goal of the design; chase a correct, streaming, skip/prune/vectorized engine, then measure.
 
 | alias | rows in `events` | when to use |
 |---|---|---|
-| `tiny` | 100K | unit tests, CI |
+| `tiny` | 100K | unit tests, CI, first Windows smoke |
 | `dev` | 1M | local UI, fast benches |
-| `resume` | **100M** | the number on the resume |
-| `stress` | 500M–1B | optional, if you have disk/RAM |
+| `laptop` | **as large as this machine can generate and query without swapping** | the number that actually goes on the resume |
+| `stretch-scale` | 100M or more | only if `laptop` was easy and disk/RAM allow |
 
-**Memory reality check.** 100M rows × 10 columns × ~8 bytes ≈ 8 GB uncompressed. You will **not** load it all. The engine streams row groups. Peak RAM should be `parallelism × batch_size × projected_columns`, plus hash-agg state. Design for a **16 GB laptop**. If 100M does not fit comfortably during *generation*, generate as many 10M files and concatenate; do not hold a pandas DataFrame of 100M rows. Use PyArrow streaming / batched writes.
+Start `laptop` at **10M**, then 25M / 50M / 100M. Stop at the largest scale that:
 
-> **Open question:** What machine will you demo on (RAM, CPU cores)? If it is an 8 GB laptop, make `resume` 50M or keep 100M but be ruthless about streaming and a smaller row-group parallelism. The resume number is allowed to change; **honesty + a live demo** beat an OOM.
+- generates with batched PyArrow writes (never a giant DataFrame)
+- queries without the OS swapping to death
+- still demos skipping (time-sorted files)
+
+**Memory reality check.** 100M rows × 10 columns × ~8 bytes ≈ 8 GB uncompressed. The engine **must stream row groups**. Peak RAM should be `parallelism × batch_size × projected_columns`, plus hash-agg state. Do not assume 16 GB — detect RAM at bench time (`Get-CimInstance Win32_ComputerSystem`) and record it in `docs/benchmarks.md`. If generation or query OOMs, drop scale; do not add a swap hack and call it 100M.
+
+After Phase 11, replace every “100M+” / “10x” in the README and `WRITEUP.md` with the measured row count, query id, and speedup.
 
 ### 7.4 Query set (Q1–Q8)
 
@@ -429,9 +439,7 @@ Rules for a fair 10x:
   1. row-at-a-time, no skip/prune
   2. row-at-a-time, skip+prune
   3. vectorized, skip+prune
-- The resume “10x a row-at-a-time baseline” should cite **(3) vs (2)** or **(3) vs (1)** explicitly. **(3) vs (2)** is the cleaner “vectorization” claim. **(3) vs (1)** is the cleaner “engine” claim. Pick one and label it.
-
-> **Open question:** Which 10x baseline do you want on the resume — vectorization-only (same skip/prune), or full-engine vs naive? Recommendation: **lead with (3) vs (1)** on the resume (bigger, still honest if labeled “naive row-at-a-time scan”), and show the breakdown in the writeup/UI so an interviewer cannot trap you.
+- The resume speedup should **lead with (3) vs (1)** labeled as a *naive row-at-a-time scan*, and the writeup/UI **must** show the full breakdown so an interviewer cannot trap you. The 10x in the placeholder bullet is not a requirement; the labeled measurement is.
 
 ### 9.3 What “10x” will actually come from
 
@@ -442,7 +450,7 @@ In order of typical impact on this design:
 3. **Vectorized filter/agg** (often 3–15× vs row iterators + GC + interface{}).
 4. **Parallel row-group scan** (close to core count on scans).
 
-If you only implement (3) and skip (1)(2), you may miss 10×. Implement all four; they are the course.
+If you only implement (3) and skip (1)(2), the speedup may be small. Implement all four; they are the course. Whatever ratio you measure is the resume ratio.
 
 ---
 
@@ -450,15 +458,21 @@ If you only implement (3) and skip (1)(2), you may miss 10×. Implement all four
 
 ```
 prism-columnar-analytics-engine/
-├── IMPLEMENTATION_PLAN.md          # this file
+├── IMPLEMENTATION_PLAN.md          # this file (source of truth)
 ├── README.md                       # demo, build, architecture sketch
-├── Makefile
+├── WRITEUP.md                      # interview script (filled after Phase 11)
+├── docs/
+│   ├── WINDOWS.md                  # canonical local runbook (Windows)
+│   ├── sql.md
+│   ├── architecture.md
+│   └── benchmarks.md               # how to reproduce measured numbers
+├── .gitattributes                  # LF for source files (Windows-safe)
 ├── docker-compose.yml
 ├── Dockerfile                      # engine
 ├── go.mod / go.sum
 ├── cmd/
-│   ├── prism/main.go               # CLI
-│   └── prismd/main.go              # HTTP server
+│   ├── prism/main.go               # CLI → prism.exe on Windows
+│   └── prismd/main.go              # HTTP server → prismd.exe
 ├── internal/
 │   ├── catalog/                    # table registry, schemas, stats cache
 │   ├── parquetscan/                # file/rg iteration, skip, prune, Arrow batches
@@ -479,22 +493,30 @@ prism-columnar-analytics-engine/
 │   └── server/                     # HTTP handlers
 ├── web/                            # Next.js app
 ├── scripts/
-│   ├── generate_data.py
+│   ├── generate_data.py            # cross-platform
 │   ├── load_postgres.py
-│   └── verify_against_postgres.py
+│   ├── verify_against_postgres.py
+│   └── windows/                    # PowerShell entry points (Phase 0)
+│       └── prism.ps1
 ├── bench/
 │   ├── queries.sql
-│   ├── run.go                      # or scripts/bench.sh wrapping `prism bench`
+│   ├── run.go                      # `go run ./bench` works on Windows
 │   └── results/                    # gitignore JSON outputs; keep a sample
 ├── testdata/                       # tiny parquet fixtures committed to git
-├── docs/
-│   ├── sql.md
-│   ├── architecture.md
-│   └── benchmarks.md               # how to reproduce resume numbers
-└── .github/workflows/ci.yml        # go test + python lint + web build
+└── .github/workflows/ci.yml        # go test + python + web build
 ```
 
+Optional: a `Makefile` for Linux CI only. **Do not make `make` the documented Windows workflow.**
+
 Keep `internal/` strict: the CLI and HTTP are thin. This is what you walk through in an intern interview.
+
+**Windows path rules for implementers:**
+
+- Always `filepath.Join` / `pathlib.Path` — never `'data/tables/' + name` with assumed `/`.
+- Data dir default: `.\data\tables\<table>\*.parquet` (same relative layout as Unix).
+- Binaries are `prism.exe` / `prismd.exe`.
+- Scripts the user runs must be `.py` (cross-platform) or `.ps1` (Windows). No bash-only `scripts/*.sh` as the sole path.
+- `.gitattributes` forces LF on `.go`, `.py`, `.ts`, `.yml` so Git-for-Windows does not checkout CRLF into the compiler.
 
 ---
 
@@ -510,14 +532,16 @@ Each phase has a **learning goal**, **deliverable**, **tests**, and a **done whe
 
 **Do:**
 
-- Go module, `cmd/prism` that prints `prism 0.0.1`.
-- `docker-compose.yml` with Postgres 16 and a volume for `./data`.
-- `Makefile`: `make engine`, `make test`, `make web`, `make up`, `make data-tiny`.
-- README skeleton: what Prism is, how to run, link to this plan.
+- Go module, `cmd/prism` that prints `prism 0.0.1` (`go run ./cmd/prism` on Windows).
+- `docker-compose.yml` with Postgres 16 and a volume for `./data` (Docker Desktop).
+- `scripts/windows/prism.ps1` verbs: `setup`, `data-tiny`, `test`, `engine`, `web`, `verify`. Document the same verbs as raw commands in `docs/WINDOWS.md`.
+- Optional Makefile for CI — not required to develop.
+- `.gitattributes` with LF for source files.
+- README: what Prism is, **link `docs/WINDOWS.md` first** for local run, link this plan. (`docs/WINDOWS.md` and `WRITEUP.md` already exist — keep them accurate.)
 - Decide data directory: `./data/tables/<table>/*.parquet`.
 - CI workflow: `go test ./...` on empty packages is fine.
 
-**Done when:** `docker compose up postgres` works; `go run ./cmd/prism` works.
+**Done when:** `docker compose up postgres` works on Windows; `go run ./cmd/prism` works in PowerShell; `docs/WINDOWS.md` matches the actual commands.
 
 ---
 
@@ -668,18 +692,18 @@ Each phase has a **learning goal**, **deliverable**, **tests**, and a **done whe
 
 ---
 
-### Phase 10 — PostgreSQL oracle + Python generator at resume scale
+### Phase 10 — PostgreSQL oracle + Python generator at laptop scale
 
-**Learning:** correctness > speed; how to generate 100M rows without melting RAM.
+**Learning:** correctness > speed; how to generate tens of millions of rows without melting RAM.
 
 **Do:**
 
 - Batched PyArrow writer for `resume` scale; tqdm progress; deterministic `--seed`.
-- `load_postgres.py`: COPY into Postgres for `tiny` and `dev` only (100M into Postgres is optional and slow; oracle at `dev` is enough if types match).
+- `load_postgres.py`: COPY into Postgres for `tiny` and `dev` only (do not load `laptop` scale into Postgres; oracle at `dev` is enough if types match).
 - `verify_against_postgres.py`: run each Q1–Q8, compare with type-aware equality (sort if no ORDER BY; floats via exact AVG-from-sums or rounded).
 - Generator should also emit a `manifest.json`: row counts, checksum of `sum(event_id)`, min/max ts — engine `describe` should match.
 
-**Done when:** `make verify` passes on `tiny` and `dev`. `make data-resume` completes on your machine and `prism describe events` shows ≥ 100M rows.
+**Done when:** `.\scripts\windows\prism.ps1 verify` (or the documented `py` commands) passes on `tiny` and `dev`. `laptop` scale generation completes on this Windows machine without swapping, and `prism describe events` shows the row count you will actually put on the resume (10M, 50M, 100M — whatever fit).
 
 ---
 
@@ -689,15 +713,15 @@ Each phase has a **learning goal**, **deliverable**, **tests**, and a **done whe
 
 **Do:**
 
-- `prism bench --scale=dev|resume --engine=all --repeat=5`
+- `prism bench --scale=dev|laptop --engine=all --repeat=5`
 - Protocol:
-  - drop OS page cache only if you document it (`echo 3 > /proc/sys/vm/drop_caches` — often not allowed; otherwise report **hot cache** and **first-run cold-ish**)
-  - warmup run discarded
-  - report median and p95 of the rest
-  - capture: wall time, rows scanned, rows emitted, row groups skipped, bytes read, peak RSS if easy (`runtime.MemStats` is Go heap only — mention that Arrow buffers may be off-heap / in C allocated memory; Arrow Go is often pure Go buffers — check and document)
-- Write `docs/benchmarks.md` with hardware (`lscpu`, RAM), commit SHA, command, table.
+  - On Windows **do not** try to drop the OS page cache (`drop_caches` is Linux). Report **hot cache** (median of runs 2–N) and **first-run** separately.
+  - Warmup run discarded
+  - Report median and p95 of the rest
+  - Capture: wall time, rows scanned, rows emitted, row groups skipped, bytes read, peak RSS if easy (`runtime.MemStats` is Go heap only — mention that Arrow buffers may live elsewhere; Arrow Go is often pure Go buffers — check and document)
+  - Record hardware in `docs/benchmarks.md` via PowerShell (`Get-CimInstance Win32_Processor`, `Win32_ComputerSystem`, commit SHA)
 - Breakdown experiment from §9.2.
-- **Do not put a number on the resume until this phase has been run at `resume` scale.** If you only get 4×, the resume says 4×. If you get 30× on Q2 and 6× on Q4, say “up to 30× on selective scans, ~6–10× on group-by” or pick one query and name it.
+- **Do not put a number on the resume until this phase has been run at `laptop` scale.** If you get 4×, the resume says 4×. If you get 30× on Q2 and 6× on Q4, say “up to 30× on selective scans, ~6–10× on group-by” or pick one query and name it. The placeholder 100M/10x is discarded, not stretched.
 
 **Done when:** you have a table you would show in an interview, and the UI can load a checked-in `bench/results/sample.json`.
 
@@ -718,7 +742,7 @@ POST /bench      { scale, query_id }          # optional, can stay CLI-only
 - CORS for local Next.js.
 - Timeouts (e.g. 60s).
 - Errors as JSON `{ error, pos? }`.
-- Never return 100M JSON rows; default `limit` 100 for non-agg, unlimited for small agg results with a hard cap (e.g. 100k).
+- Never return huge JSON results; default `limit` 100 for non-agg, unlimited for small agg results with a hard cap (e.g. 100k).
 
 **Done when:** `curl` a GROUP BY and get JSON + profile.
 
@@ -736,17 +760,18 @@ POST /bench      { scale, query_id }          # optional, can stay CLI-only
 
 Visual design: clean dark-ish dashboard, not a design-system science fair. Table names + schema in a sidebar.
 
-**Done when:** a stranger can `docker compose up`, open the UI, run Q6, and *see* that 90%+ of row groups were skipped.
+**Done when:** a stranger following `docs/WINDOWS.md` can compose-up (or run engine+web natively), open the UI, run Q6, and *see* that most row groups were skipped.
 
 ---
 
 ### Phase 14 — Polish for portfolio
 
-- README with architecture diagram, demo GIF/screenshot, reproduce-bench instructions.
+- README with architecture diagram, demo GIF/screenshot, link to `docs/WINDOWS.md`.
 - `docs/architecture.md` in your own words (this is interview prep).
+- `docs/WINDOWS.md` updated so every command still works.
 - Sample queries in the UI.
-- License (MIT is fine).
-- A 1-page `WRITEUP.md`: what you built, what you measured, what you would do next (joins, spill, cost-based).
+- **No license file** unless you later choose one.
+- Fill `WRITEUP.md`: what you built, what you measured on this laptop, what you would do next (joins, spill, cost-based).
 - Optional: blog post. High ROI for intern recruiting.
 
 ---
@@ -811,6 +836,8 @@ This JSON *is* the UI spec. If the engine produces it, the frontend is straightf
 
 ## 14. Docker / developer workflow
 
+**Canonical local instructions: [`docs/WINDOWS.md`](docs/WINDOWS.md).** Native Windows + Docker Desktop is the supported setup. WSL2 is a convenience, not a requirement.
+
 ```yaml
 # docker-compose services (target)
 services:
@@ -833,39 +860,45 @@ services:
       NEXT_PUBLIC_API: http://localhost:8080
 ```
 
-Host workflow (primary during development):
+During development, prefer **native** engine + web (faster iterate) and Docker **only for Postgres**:
 
-```
-make data-tiny          # python generator
-make test               # go test ./...
-make run-engine         # prismd
-make run-web            # next dev
-make verify             # oracle on tiny
-make bench-dev
+```powershell
+docker compose up -d postgres
+py -3 scripts\generate_data.py --scale tiny
+go test ./...
+go run .\cmd\prismd
+cd web; npm install; npm run dev
+py -3 scripts\verify_against_postgres.py --scale tiny
+go run .\cmd\prism -- bench --scale=dev
 ```
 
-Do not require Kubernetes, object storage, or a Makefile that only works in CI.
+The same verbs should exist as `.\scripts\windows\prism.ps1 <verb>`.
+
+Do not require Kubernetes, object storage, Make, or bash.
+
+**Docker Desktop notes (Windows):** cap VM memory in Settings so generation + Postgres + Chrome can coexist; put `.\data` in a Defender exclusion if generation is disk-bound; use Linux containers.
 
 ---
 
 ## 15. Performance and resume-number rules (non-negotiable)
 
-1. **Measure before you write the bullet.** The 100M / 10x figures in the prompt are *targets*, not facts.
-2. **Name the query.** “10x on PrismBench Q2 (7-day window, 100M rows)” is credible. “10x faster analytics” is not.
-3. **Name the baseline.** See §9.2.
-4. **Single node, one machine, command in the repo.**
+1. **Measure before you write the bullet.** The 100M / 10x figures are *placeholders*, not a spec the engine must hit.
+2. **Name the query.** “Nx on PrismBench Q2 (7-day window, YM rows on this laptop)” is credible. “10x faster analytics” is not.
+3. **Name the baseline.** Lead with (3) vs (1) from §9.2; show the breakdown in the UI/writeup.
+4. **Single node, this Windows machine, command in `docs/WINDOWS.md`.**
 5. If GC noise dominates, document `GOGC` / `GOMEMLIMIT`; do not hide it.
 6. If Arrow/Parquet already vectorize internally, your row-at-a-time path must still be a *real* row loop over decoded values, not “the same batch code with batch size 1” only — though `batch size = 1` is a useful extra data point in the writeup.
+7. Report **hot cache** on Windows. Do not pretend you dropped page cache.
 
 ---
 
 ## 16. Suggested demo script (5 minutes)
 
-1. Open UI, show `DESCRIBE` equivalent / schema of `events` at 100M rows.
+1. Open UI, show `DESCRIBE` equivalent / schema of `events` at whatever `laptop` scale you actually generated.
 2. Run Q1, show column pruning in the plan (1–2 columns read).
-3. Run Q2, show 90%+ row groups skipped and a fast wall time.
+3. Run Q2, show a large fraction of row groups skipped and a fast wall time.
 4. Toggle engine to **row-at-a-time**, rerun Q2, show the slowdown.
-5. Run Q6 (resume query), show GROUP BY result.
+5. Run Q6 (the “resume query”), show GROUP BY result.
 6. Flip to Bench page, show the bar chart.
 7. Optionally: `EXPLAIN` of a query that **cannot** skip (random `user_id = 42`) and talk about why clustering matters.
 
@@ -878,15 +911,18 @@ That last contrast is what makes this sound like you understand warehouses, not 
 | Risk | Mitigation |
 |---|---|
 | Arrow Go parquet API is awkward / version churn | Spike in Phase 1; pin version; wrap in `parquetscan` |
-| 100M row generation OOMs in pandas | Batched writes only; never a giant DataFrame |
-| “10x” fails because baseline also uses Arrow batches | Force the row engine through a per-row interface; profile both |
+| Laptop OOM on large generation | Batched writes; scale ladder 10M → 25M → 50M → 100M; stop before swap |
+| “10x” fails because baseline also uses Arrow batches | Force the row engine through a per-row interface; profile both; **use the measured ratio** |
 | Skipping does nothing because data is shuffled | Sort by `ts` at generation; document clustering |
 | Hash agg on `user_id` explodes RAM | Q5 stays filtered; memory budget + error “group cardinality too high” |
 | Parser rabbit hole | Freeze dialect in §6; reject the rest |
-| UI swallows the semester | Phase 13 is last; a CLI-only engine already matches the resume line |
-| Comparing to Postgres unfairly | Oracle vs competitor labeled; resume 10x is internal |
+| UI swallows the semester | Cap at three pages; CLI-only already matches the engine bullet |
+| Comparing to Postgres unfairly | Oracle only in v1; resume speedup is internal |
 | Nulls/UTF-8/timezone bugs | Postgres oracle; timestamps as UTC ms |
 | Parallelism no-op due to reader lock | Parallelize files first; measure |
+| Windows path / CRLF / `make` breakage | `filepath`, `.gitattributes` LF, PowerShell runbook, no bash-only scripts |
+| Defender scanning every Parquet write | Exclude `.\data`; document in `docs/WINDOWS.md` |
+| Docker Desktop RAM fight with Chrome + Go | Compose Postgres only while developing; cap Docker VM memory |
 
 ---
 
@@ -894,15 +930,16 @@ That last contrast is what makes this sound like you understand warehouses, not 
 
 You can claim v1 when **all** of the following are true:
 
-- [ ] Q1–Q8 run on a generated `events` table of at least 100M rows (or whatever number you actually measured).
+- [ ] Q1–Q8 run on a generated `events` table at the largest `laptop` scale that this Windows machine can handle (document the row count; 100M is not required).
 - [ ] Vectorized path is correct vs row path on `tiny`, and vs Postgres on `dev`.
 - [ ] EXPLAIN ANALYZE reports column prune + row-group skip counts that match reality.
-- [ ] Bench harness produces a checked-in sample and a documented `resume` run.
-- [ ] CLI + `prismd` + a workbench that can run SQL and show a plan.
-- [ ] README can get a new clone to a first query in a short, boring set of commands.
+- [ ] Bench harness produces a checked-in sample and a documented `laptop` run in `docs/benchmarks.md`.
+- [ ] CLI + `prismd` + a three-page workbench that can run SQL and show a plan.
+- [ ] `docs/WINDOWS.md` can get a Windows clone to a first query without WSL or Make.
+- [ ] `WRITEUP.md` filled with measured numbers (query named, baseline named, hardware named).
 - [ ] You can explain, without notes: Parquet row groups, why sorting `ts` helps, what a selection vector is, and how two-phase aggregation works.
 
-The resume line is then updated to the **measured** numbers.
+The resume line is then updated to the **measured** numbers. The placeholder 100M/10x is deleted.
 
 ---
 
@@ -929,55 +966,31 @@ Industry analogues to mention in a writeup (you are not reimplementing these pro
 
 ---
 
-## 20. Open questions (please answer before / during Phase 0)
+## 20. Locked decisions
 
-These are the decisions that change the plan. Recommendations are included so work can start if you do not care.
+Answered and frozen. Do not re-litigate during v1. Implementation PRs check §18 and do not expand dialect until those boxes are ticked.
 
-### Language and stack
+| # | Question | Decision |
+|---|---|---|
+| 1 | Engine language | **Go.** Not Rust. |
+| 2 | Next.js in v1 | **Yes — thin 3-page workbench** (workbench, plan, bench). |
+| 3 | DuckDB baseline | **No for v1.** Stretch only, later. |
+| 4 | Inner hash joins | **Stretch.** Still generate `users` and `products`. |
+| 5 | Extra SQL (`HAVING`, `CASE`, `date_trunc`, `DISTINCT`) | **None in v1.** Dialect in §6 is frozen. |
+| 6 | Writes / INSERT SQL | **No.** Generator writes Parquet; catalog walks the data dir (optional `prism register`). |
+| 7 | Hardware | **Personal Windows laptop only.** No external/cloud box. Placeholder 100M/10x are replaced after measurement. Scale = largest `laptop` size that does not swap. |
+| 8 | Dataset | **Synthetic `events` (+ `users` / `products`).** Not NYC Taxi / TPC-H in v1. |
+| 9 | Resume numbers | **Placeholders.** Rewrite after Phase 11 with named query, named baseline, measured rows and speedup. |
+| 10 | License | **None.** Do not add `LICENSE`. |
+| 11 | Writeup + Windows runbook | **`WRITEUP.md`** (fill after measurement) and **`docs/WINDOWS.md`** (canonical local setup, created now). |
+| 12 | Name | **Prism.** |
+| 13 | This plan | **Source of truth.** Implementation follows §21. |
 
-1. **Go or Rust for the engine?**  
-   **Recommendation: Go.** Reverse this only if you explicitly want Rust intern-signal and accept slower UI/API glue.
+Also locked from recommendations you deferred:
 
-2. **Is Next.js required for v1 or is CLI + EXPLAIN enough for the engine bullet?**  
-   **Recommendation: keep a thin Next.js workbench.** It is in the stated tech stack and makes the demo 10× more convincing. Cap it at the three pages in Phase 13.
-
-3. **DuckDB as an extra baseline?**  
-   **Recommendation: stretch.** Excellent for curiosity (“we are 0.3× DuckDB on Q4, which is expected”) but easy to demoralize yourself.
-
-### Scope
-
-4. **Inner hash joins in v1?**  
-   **Recommendation: no.** Generate `users`/`products` anyway.
-
-5. **Any SQL must-haves beyond §6?** (`HAVING`, `CASE`, `date_trunc`, `DISTINCT`)  
-   **Recommendation: `date_trunc` if grouping by day feels necessary for the demo; otherwise no.**
-
-6. **Writes?** Some intern projects add “load a parquet file” as a command.  
-   **Recommendation: `prism register` / generator writes files; no INSERT SQL.**
-
-### Data and hardware
-
-7. **Demo hardware (RAM, cores, OS)?** This sets whether 100M is comfortable.  
-   **Recommendation: design for 16 GB / 4+ cores; stream everything.**
-
-8. **Dataset flavor?** Synthetic product-analytics `events` (this plan) vs NYC Taxi vs mini-TPC-H.  
-   **Recommendation: synthetic `events`.** Full control over clustering, cardinality, and licensing. NYC Taxi is a nice *second* dataset later (“we ran the same engine on public data”).
-
-9. **Resume numbers:** keep 100M+ / 10x as *targets* and replace with measured values?  
-   **Recommendation: yes, always.**
-
-### Product / portfolio
-
-10. **Public GitHub, MIT license, your name on README?** Assume yes.
-
-11. **Do you want a blog-style `WRITEUP.md` as part of v1?**  
-    **Recommendation: yes.** It is the interview script.
-
-12. **Name / branding:** repo is `prism-columnar-analytics-engine`. Keep **Prism**?  
-    **Recommendation: yes.**
-
-13. **Should this plan live as the source of truth, and implementation PRs check boxes in §18?**  
-    **Recommendation: yes. Do not expand dialect until v1 is checked.**
+- **Postgres is oracle-only in v1** (not a UI bench competitor).
+- Resume speedup **leads with vectorized+optimizations vs naive row-at-a-time without skip/prune**, with the full 3-way breakdown in the writeup/UI.
+- **Native Windows is first-class.** WSL2 optional. No Make/bash as the only workflow.
 
 ---
 
@@ -985,21 +998,21 @@ These are the decisions that change the plan. Recommendations are included so wo
 
 Use this as the actual build order:
 
-1. Phase 0 scaffold  
-2. Phase 1 parquet scan + Python tiny generator  
-3. Phase 2 catalog/stats  
-4. Phase 3 vectorized filter  
-5. Phase 4 agg/sort/limit  
-6. Phase 5 SQL  
-7. Phase 6 plans + EXPLAIN  
-8. Phase 7 skipping that you can prove  
-9. Phase 8 dual engine  
-10. Phase 9 parallel  
-11. Phase 10 scale + oracle  
-12. Phase 11 bench (then rewrite the resume number)  
-13. Phase 12 API  
-14. Phase 13 UI  
-15. Phase 14 polish  
+1. Phase 0 scaffold (Windows runbook commands must work as they are implemented)
+2. Phase 1 parquet scan + Python tiny generator
+3. Phase 2 catalog/stats
+4. Phase 3 vectorized filter
+5. Phase 4 agg/sort/limit
+6. Phase 5 SQL
+7. Phase 6 plans + EXPLAIN
+8. Phase 7 skipping that you can prove
+9. Phase 8 dual engine
+10. Phase 9 parallel
+11. Phase 10 scale + oracle (stop at the laptop's real max)
+12. Phase 11 bench (then rewrite the resume number)
+13. Phase 12 API
+14. Phase 13 UI
+15. Phase 14 polish (`WRITEUP.md`, keep `docs/WINDOWS.md` accurate)
 
 **Vertical slices you can demo early:** after Phase 4 you already have a columnar engine without SQL; after Phase 8 you have the resume technical core; after Phase 11 you have the resume *numbers*; after Phase 13 you have the portfolio piece.
 
@@ -1013,5 +1026,9 @@ Use this as the actual build order:
 - When Arrow APIs fight you, wrap them; do not leak parquet types above `parquetscan`.
 - Match Postgres null semantics rather than inventing “nice” ones.
 - If a phase is taking too long, cut UI polish and join dreams, not tests or EXPLAIN stats.
+- **Windows:** `filepath.Join`, LF via `.gitattributes`, PowerShell + Python entry points, `prism.exe`, no `drop_caches`, no bash-only scripts, Docker Desktop for Postgres.
+- **Do not add a license file.**
+- **Do not add DuckDB or JOIN** until §18 is complete.
+- Update `docs/WINDOWS.md` in the same PR whenever you add a command the user must run.
 
-When this plan and the answers to §20 are agreed, implementation starts at Phase 0 on a feature branch and moves down the checklist.
+Implementation starts at Phase 0 on a feature branch and moves down the checklist.
