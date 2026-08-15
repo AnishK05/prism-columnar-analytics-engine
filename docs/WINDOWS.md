@@ -4,7 +4,7 @@ This is the **canonical local setup** for Prism. The engine is meant to be devel
 
 Native PowerShell + Docker Desktop is first-class. WSL2 is optional.
 
-> **Status (Phase 0–1):** CLI `version` / `inspect` / `scan` work. Generate Parquet with Python. Postgres in Docker is scaffolded for later oracle tests. SQL, filters, and the Next.js workbench are not built yet.
+> **Status (Phase 0–3):** CLI `version` / `tables` / `describe` / `inspect` / `scan` work, including vectorized `--where` filters. SQL, aggregations, and the Next.js workbench are not built yet.
 
 ---
 
@@ -115,11 +115,15 @@ A small `events` table lives in `testdata\tables` (8,192 rows, sorted by `ts`, m
 
 ```powershell
 go run .\cmd\prism -- version
+go run .\cmd\prism -- tables --data-dir testdata\tables
+go run .\cmd\prism -- describe events --data-dir testdata\tables
 go run .\cmd\prism -- inspect --data-dir testdata\tables --table events
 go run .\cmd\prism -- scan --data-dir testdata\tables --table events --columns country,amount_cents --limit 5
+go run .\cmd\prism -- scan --data-dir testdata\tables --table events --where "amount_cents > 0 AND country = 'US'" --columns country,amount_cents --limit 10
+py -3 .\scripts\filter_oracle.py --data-dir testdata\tables --expect 30
 ```
 
-After `go build -o prism.exe .\cmd\prism` you can run `.\prism.exe` with the same flags.
+The oracle uses PyArrow compute (not pandas) so `NULL > 0` stays unknown, matching the engine. After `go build -o prism.exe .\cmd\prism` you can run `.\prism.exe` with the same flags.
 
 ### 4. Generate larger tables
 

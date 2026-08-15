@@ -7,24 +7,24 @@ A miniature **vectorized, single-node OLAP engine** for learning how analytical 
 Blueprint: **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)** (decisions locked in §20).  
 Interview script (fill after measurement): **[WRITEUP.md](./WRITEUP.md)**.
 
-## What’s here now (Phase 0–1)
+## What’s here now (Phase 0–3)
 
-- `go run ./cmd/prism version`
-- `prism inspect` — Parquet schema, row groups, min/max stats
-- `prism scan` — read selected columns as Arrow batches (column pruning)
+- `prism tables` / `prism describe` — catalog with cached row-group min/max (zone maps)
+- `prism inspect` / `prism scan` — Parquet → Arrow, column pruning
+- `prism scan --where 'amount_cents > 0 AND country = ''US'''` — vectorized filter (SQL three-valued logic; `NULL > 0` is not TRUE)
 - Python generator for synthetic `events` / `users` / `products`
-- Docker Compose Postgres 16 (oracle, used later)
-- Committed fixture: `testdata/tables` (8,192 `events` rows)
+- Committed fixture: `testdata/tables` (8,192 `events` rows, `ts` clustered)
 
 ```bash
 go test ./...
-go run ./cmd/prism inspect --data-dir testdata/tables --table events
-go run ./cmd/prism scan --data-dir testdata/tables --table events --columns country,amount_cents --limit 5
+go run ./cmd/prism tables --data-dir testdata/tables
+go run ./cmd/prism describe events --data-dir testdata/tables
+go run ./cmd/prism scan --data-dir testdata/tables --table events --where "amount_cents > 0 AND country = 'US'" --columns country,amount_cents --limit 10
 ```
 
 On Windows PowerShell, use `.\` paths; see `docs/WINDOWS.md`.
 
-SQL, filters, aggregations, and the Next.js workbench are not implemented yet.
+SQL, aggregations, and the Next.js workbench are not implemented yet.
 
 ## Resume line (placeholders — rewrite after Phase 11)
 
@@ -45,4 +45,6 @@ Pinned `github.com/apache/arrow-go/v18 v18.0.0` so Go 1.22 works. Newer Arrow Go
 | Plan | Blueprint + Windows runbook | Done |
 | 0 | Scaffold, CLI, Compose, CI | Done |
 | 1 | Parquet → Arrow scan + generator | Done |
-| 2+ | Catalog stats, SQL, exec, UI | Not started |
+| 2 | Catalog stats, tables/describe | Done |
+| 3 | Vectorized `--where` filters | Done |
+| 4+ | Aggregations, SQL, exec, UI | Not started |

@@ -224,7 +224,7 @@ func (r *Reader) Next() (arrow.Record, error) {
 			r.stats.BatchesEmitted++
 			return rec, nil
 		}
-		if err := r.cur.Err(); err != nil {
+		if err := r.cur.Err(); err != nil && err != io.EOF {
 			r.err = err
 			return nil, err
 		}

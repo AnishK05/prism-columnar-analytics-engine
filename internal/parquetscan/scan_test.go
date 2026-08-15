@@ -194,6 +194,34 @@ func TestInspectMinMax(t *testing.T) {
 	}
 }
 
+func TestScanTwoFiles(t *testing.T) {
+	dir := t.TempDir()
+	p0 := filepath.Join(dir, "part-0000.parquet")
+	p1 := filepath.Join(dir, "part-0001.parquet")
+	writeTenColParquet(t, p0, 100, 100)
+	writeTenColParquet(t, p1, 50, 50)
+	rdr, err := Open(context.Background(), []string{p0, p1}, Options{Columns: []string{"c0"}, BatchSize: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rdr.Close()
+	var n int64
+	for {
+		rec, err := rdr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		n += rec.NumRows()
+		rec.Release()
+	}
+	if n != 150 {
+		t.Fatalf("rows = %d, want 150 (scanner stopped after first file?)", n)
+	}
+}
+
 func TestScanLimitViaConsumer(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "t.parquet")

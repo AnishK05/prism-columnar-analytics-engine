@@ -524,7 +524,7 @@ Keep `internal/` strict: the CLI and HTTP are thin. This is what you walk throug
 
 Each phase has a **learning goal**, **deliverable**, **tests**, and a **done when**. Do not start Phase N+1 until Phase N is demoable. Timeboxes are effort, not calendar promises — skip them if they get in the way, keep the sequence.
 
-**Progress:** Phase 0 and Phase 1 are implemented (`cmd/prism` version/inspect/scan, generator, `testdata/tables` fixture).
+**Progress:** Phase 0–3 are implemented (`tables`/`describe`, vectorized `--where` filters, zone-map catalog).
 
 ---
 
@@ -576,7 +576,7 @@ Each phase has a **learning goal**, **deliverable**, **tests**, and a **done whe
 - CLI: `prism tables`, `prism describe events` (schema + file count + total rows + sample stats).
 - Persist nothing; rebuild is fine at this scale (100M rows of *stats* is tiny — thousands of row groups).
 
-**Done when:** `describe` shows total rows matching the generator, and stats for `ts` look sorted/increasing across row groups.
+**Done when:** `describe` shows total rows matching the generator, and stats for `ts` look sorted/increasing across row groups. **Shipped in Phase 2–3.**
 
 ---
 
@@ -593,7 +593,7 @@ Each phase has a **learning goal**, **deliverable**, **tests**, and a **done whe
 
 **Tests:** hand-built Arrow batches with nulls, empty batches, all-true, all-false, mixed.
 
-**Done when:** filter matches a Python/pandas predicate on `testdata/events_tiny.parquet` exactly, including null semantics (`NULL > 0` is not TRUE).
+**Done when:** filter matches a Python/pandas predicate on `testdata/events_tiny.parquet` exactly, including null semantics (`NULL > 0` is not TRUE). **Shipped in Phase 2–3** (`scripts/filter_oracle.py` uses PyArrow compute so nulls match SQL, not pandas `NA > 0` → False).
 
 ---
 
