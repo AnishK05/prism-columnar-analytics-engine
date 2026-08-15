@@ -396,6 +396,7 @@ func cmdAgg(args []string) error {
 	aggList := fs.String("agg", "count", "aggregates: count,sum(col),avg(col),min(col),max(col)")
 	where := fs.String("where", "", "optional predicate")
 	order := fs.String("order", "", "comma-separated output columns, suffix :desc")
+	descAll := fs.Bool("desc", false, "sort every --order key descending")
 	limit := fs.Int64("limit", 20, "max rows to print (0 = all)")
 	batch := fs.Int64("batch-size", parquetscan.DefaultBatchSize, "Arrow batch size")
 	if err := fs.Parse(flagsFirst(args)); err != nil {
@@ -447,7 +448,7 @@ func cmdAgg(args []string) error {
 					desc = true
 				}
 			}
-			orderKeys = append(orderKeys, kernel.OrderKey{Name: name, Desc: desc})
+			orderKeys = append(orderKeys, kernel.OrderKey{Name: name, Desc: desc || *descAll})
 		}
 	}
 	res, err := exec.Run(context.Background(), exec.Request{
