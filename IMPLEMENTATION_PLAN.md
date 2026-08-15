@@ -524,6 +524,8 @@ Keep `internal/` strict: the CLI and HTTP are thin. This is what you walk throug
 
 Each phase has a **learning goal**, **deliverable**, **tests**, and a **done when**. Do not start Phase N+1 until Phase N is demoable. Timeboxes are effort, not calendar promises — skip them if they get in the way, keep the sequence.
 
+**Progress:** Phase 0 and Phase 1 are implemented (`cmd/prism` version/inspect/scan, generator, `testdata/tables` fixture).
+
 ---
 
 ### Phase 0 — Scaffolding and demo story
@@ -557,7 +559,7 @@ Each phase has a **learning goal**, **deliverable**, **tests**, and a **done whe
 - CLI: `prism scan --table events --columns country,amount_cents --limit 5`.
 - Log bytes read if the reader exposes it; if not, approximate from file size × columns fraction.
 
-**Pitfall:** Arrow Go APIs change across major versions. Pin a version in `go.mod` and document it. Prefer `apache/arrow-go/v18` (or whatever is current stable when you start) and do not mix `github.com/apache/arrow/go/v12`.
+**Pitfall:** Arrow Go APIs change across major versions. **Pinned: `github.com/apache/arrow-go/v18 v18.0.0`** (Go 1.22). Do not mix `github.com/apache/arrow/go/v12`. Newer `arrow-go` (v18.3+) needs Go 1.23+; v18.7 needs Go 1.25.
 
 **Done when:** you can dump 5 rows of a projected subset, and a test proves that requesting 2 of 10 columns does not allocate arrays for the other 8.
 

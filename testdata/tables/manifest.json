@@ -1,0 +1,29 @@
+{
+  "scale": "testdata",
+  "seed": 42,
+  "out_dir": "/workspace/testdata/tables",
+  "tables": {
+    "events": {
+      "rows": 8192,
+      "files": [
+        "events/part-0000.parquet",
+        "events/part-0001.parquet"
+      ],
+      "min_ts_ms": 1704067200000,
+      "max_ts_ms": 1735603199000,
+      "sum_event_id": 33558528
+    },
+    "users": {
+      "rows": 256,
+      "files": [
+        "users/part-0000.parquet"
+      ]
+    },
+    "products": {
+      "rows": 64,
+      "files": [
+        "products/part-0000.parquet"
+      ]
+    }
+  }
+}
