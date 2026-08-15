@@ -4,7 +4,7 @@ This is the **canonical local setup** for Prism. The engine is meant to be devel
 
 Native PowerShell + Docker Desktop is first-class. WSL2 is optional.
 
-> **Status (Phase 0–9):** CLI `version` / `tables` / `describe` / `inspect` / `scan` / `agg` / `sql` / `explain` work. Dual engine (`--engine=vectorized|row`) and `--jobs` parallelism are on. The Next.js workbench is not built yet.
+> **Status (Phase 0–11):** CLI through `sql` / `explain` / `bench` works. Dual engine, `--jobs`, Postgres oracle scripts, and the hot-cache bench harness are on. The Next.js workbench is not built yet. Resume timings stay placeholders until you run `--scale laptop` on this machine.
 
 ---
 
@@ -17,7 +17,7 @@ Install these on Windows (Win10/11, 64-bit). **winget** is the default path; the
 | Git for Windows | clone, line endings | `winget install Git.Git` |
 | Go 1.22+ | engine (`apache/arrow-go` **v18.0.0** is pinned; it supports Go 1.22) | `winget install GoLang.Go` |
 | Python 3.11+ | data generator | `winget install Python.Python.3.12` |
-| Docker Desktop | PostgreSQL oracle (Phase 10; optional now) | `winget install Docker.DockerDesktop` |
+| Docker Desktop | PostgreSQL oracle (`prism.ps1 verify`) | `winget install Docker.DockerDesktop` |
 
 Node.js is **not** needed until Phase 13 (workbench).
 
@@ -93,6 +93,8 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 .\scripts\windows\prism.ps1 setup
 .\scripts\windows\prism.ps1 test
 .\scripts\windows\prism.ps1 data-tiny
+.\scripts\windows\prism.ps1 verify
+.\scripts\windows\prism.ps1 bench-dev
 ```
 
 The `.ps1` file wraps the commands below. Raw `go` / `py` is the source of truth.
@@ -117,6 +119,7 @@ A small `events` table lives in `testdata\tables` (8,192 rows, sorted by `ts`, m
 go run .\cmd\prism -- version
 go run .\cmd\prism -- tables --data-dir testdata\tables
 go run .\cmd\prism -- describe events --data-dir testdata\tables
+go run .\cmd\prism -- describe events --json --data-dir testdata\tables
 go run .\cmd\prism -- inspect --data-dir testdata\tables --table events
 go run .\cmd\prism -- scan --data-dir testdata\tables --table events --columns country,amount_cents --limit 5
 go run .\cmd\prism -- scan --data-dir testdata\tables --table events --where "amount_cents > 0 AND country = 'US'" --columns country,amount_cents --limit 10
@@ -129,6 +132,8 @@ go run .\cmd\prism -- explain --analyze --data-dir testdata\tables --file testda
 go run .\cmd\prism -- sql --engine=row --jobs=1 --data-dir testdata\tables --file testdata\sql\ok\q1.sql
 go run .\cmd\prism -- sql --jobs=4 --data-dir testdata\tables --file testdata\sql\ok\q1.sql
 py -3 .\scripts\agg_oracle.py --data-dir testdata\tables
+py -3 .\scripts\verify_manifest.py --data-dir testdata\tables
+go run .\cmd\prism -- bench --scale testdata --repeat 3
 ```
 
 The filter oracle uses PyArrow compute (not pandas) so `NULL > 0` stays unknown, matching the engine. After `go build -o prism.exe .\cmd\prism` you can run `.\prism.exe` with the same flags.
@@ -140,29 +145,53 @@ SQL dialect: [docs/sql.md](sql.md). `--engine=row` is the fair speedup baseline 
 ```powershell
 py -3 .\scripts\generate_data.py --scale tiny
 # later: --scale dev      (1M rows)
-# later: --scale laptop   (starts at 10M)
+# later: --scale laptop   (starts at 10M; then --rows 25000000 / 50000000 if it fits)
 ```
 
-Output: `.\data\tables\events\*.parquet` plus `users` and `products`. Then:
+Output: `.\data\tables\events\*.parquet` plus `users` and `products`, and `.\data\tables\manifest.json` (row count, `sum(event_id)`, min/max `ts`). Then:
 
 ```powershell
 go run .\cmd\prism -- inspect --table events
+go run .\cmd\prism -- describe events
 go run .\cmd\prism -- scan --table events --columns country,amount_cents --limit 5
+py -3 .\scripts\verify_manifest.py --data-dir data\tables
 ```
 
 Default data dir is `.\data\tables`, or set `PRISM_DATA_DIR`.
 
-Do **not** build one giant pandas DataFrame. The generator writes Parquet in batches.
+Do **not** build one giant pandas DataFrame. The generator writes Parquet in batches and shows a tqdm bar.
 
-### 5. Postgres (optional until Phase 10)
+### 5. Postgres oracle (tiny / dev only)
 
 ```powershell
 docker compose up -d postgres
+py -3 .\scripts\load_postgres.py --scale testdata
+py -3 .\scripts\verify_against_postgres.py --scale testdata
+py -3 .\scripts\load_postgres.py --scale tiny
+py -3 .\scripts\verify_against_postgres.py --scale tiny
+# after generating --scale dev:
+py -3 .\scripts\load_postgres.py --scale dev
+py -3 .\scripts\verify_against_postgres.py --scale dev
 ```
 
-Postgres: `localhost:5432`, user `postgres`, password `prism`, db `prism_oracle`.
+Or `.\scripts\windows\prism.ps1 verify` (compose up, testdata + tiny, and dev if `data\tables` is already a 1M generate).
+
+Postgres: `localhost:5432`, user `postgres`, password `prism`, db `prism_oracle`. Override with `DATABASE_URL`.
+
+**Do not** load `--scale laptop` into Postgres. The loader refuses it. Oracle at `dev` is enough.
 
 Stop later with `docker compose down`.
+
+### 6. Benchmarks
+
+See **[docs/benchmarks.md](benchmarks.md)**. Short version:
+
+```powershell
+go run .\cmd\prism -- bench --scale testdata --engine all --repeat 3
+go run .\cmd\prism -- bench --scale dev --engine all --repeat 5 --out .\bench\results\dev.json
+```
+
+Hot cache only on Windows (no `drop_caches`). Warmup discarded; first-run and hot median/p95 are reported separately. The 3-way breakdown is row-naive / row-opt / vectorized.
 
 ### Not in this phase
 
@@ -170,8 +199,6 @@ Stop later with `docker compose down`.
 |---|---|
 | `prismd` HTTP API | Phase 12 |
 | Next.js workbench | Phase 13 |
-| `verify_against_postgres.py` | Phase 10 |
-| `prism bench` | Phase 11 |
 
 ---
 

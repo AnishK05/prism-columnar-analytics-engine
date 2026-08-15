@@ -55,7 +55,7 @@ Hardware (**[TODO: paste from `Get-CimInstance`]**):
 
 ## Measurements
 
-Reproduce with `docs/WINDOWS.md` (hot cache; Windows cannot drop page cache).
+Reproduce with [`docs/WINDOWS.md`](docs/WINDOWS.md) and [`docs/benchmarks.md`](docs/benchmarks.md) (hot cache; Windows cannot drop page cache). The harness is `prism bench`; fill this table from a **laptop-scale** JSON on this machine, not from `bench/results/sample.json`.
 
 | Query | What it shows | Rows | Vectorized | Row-at-a-time naive | Row-at-a-time + skip/prune | Speedup vs naive |
 |---|---|---|---|---|---|---|

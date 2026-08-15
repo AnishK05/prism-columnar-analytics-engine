@@ -221,3 +221,27 @@ func (t *Table) Clustering(col string) (ok bool, detail string) {
 func compareBounds(a, b parquetscan.Bound) (int, error) {
 	return a.Cmp(b)
 }
+
+// TimestampRangeMS returns min(min) and max(max) for an INT64 timestamp
+// column across all row groups (unix milliseconds).
+func (t *Table) TimestampRangeMS(col string) (minMS, maxMS int64, ok bool) {
+	var have bool
+	for _, rg := range t.RowGroups {
+		st, found := rg.ColStats(col)
+		if !found || !st.HasMinMax || st.MinBound.Kind != parquetscan.BoundInt64 {
+			continue
+		}
+		if !have {
+			minMS, maxMS = st.MinBound.I64, st.MaxBound.I64
+			have = true
+			continue
+		}
+		if st.MinBound.I64 < minMS {
+			minMS = st.MinBound.I64
+		}
+		if st.MaxBound.I64 > maxMS {
+			maxMS = st.MaxBound.I64
+		}
+	}
+	return minMS, maxMS, have
+}

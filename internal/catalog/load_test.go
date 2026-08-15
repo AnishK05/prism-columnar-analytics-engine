@@ -64,6 +64,10 @@ func TestLoadTestdata(t *testing.T) {
 	if last.MaxBound.I64 != 1735603199000 {
 		t.Fatalf("last ts max = %+v", last.MaxBound)
 	}
+	minTS, maxTS, ok := events.TimestampRangeMS("ts")
+	if !ok || minTS != 1704067200000 || maxTS != 1735603199000 {
+		t.Fatalf("TimestampRangeMS %d %d ok=%v", minTS, maxTS, ok)
+	}
 }
 
 func TestLoadMissingDir(t *testing.T) {
