@@ -23,4 +23,9 @@ jobs:
           python -m pip install -r scripts/requirements.txt
           python scripts/generate_data.py --scale testdata --out /tmp/prism-testdata
           go run ./cmd/prism inspect --data-dir /tmp/prism-testdata --table events
+          go run ./cmd/prism tables --data-dir /tmp/prism-testdata
+          go run ./cmd/prism describe events --data-dir /tmp/prism-testdata
           go run ./cmd/prism scan --data-dir /tmp/prism-testdata --table events --columns country,amount_cents --limit 5
+          go run ./cmd/prism scan --data-dir /tmp/prism-testdata --table events --where "amount_cents > 0 AND country = 'US'" --columns country,amount_cents --limit 5
+          python scripts/filter_oracle.py --data-dir testdata/tables --expect 30
+          python scripts/filter_oracle.py --data-dir /tmp/prism-testdata --expect 30

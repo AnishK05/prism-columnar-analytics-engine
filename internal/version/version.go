@@ -1,4 +1,4 @@
 package version
 
 // Version is the CLI/engine version string.
-const Version = "0.0.1"
+const Version = "0.2.0"

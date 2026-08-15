@@ -1,6 +1,7 @@
 package parquetscan
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math"
 	"strings"
@@ -32,6 +33,47 @@ type RowGroupInfo struct {
 	Columns         []ColumnChunkInfo
 }
 
+// BoundKind is the decoded type of a Parquet min/max statistic.
+type BoundKind uint8
+
+const (
+	BoundNone BoundKind = iota
+	BoundInt64
+	BoundFloat64
+	BoundBool
+	BoundBytes
+)
+
+// Bound is a typed zone-map endpoint.
+type Bound struct {
+	Kind  BoundKind
+	I64   int64
+	F64   float64
+	Bool  bool
+	Bytes []byte
+}
+
+func (b Bound) String() string {
+	switch b.Kind {
+	case BoundInt64:
+		return formatStatValue(parquet.Types.Int64, i64Bytes(b.I64))
+	case BoundFloat64:
+		return formatStatValue(parquet.Types.Double, f64Bytes(b.F64))
+	case BoundBool:
+		if b.Bool {
+			return "true"
+		}
+		return "false"
+	case BoundBytes:
+		if isPrintable(b.Bytes) {
+			return string(b.Bytes)
+		}
+		return fmt.Sprintf("0x%x", b.Bytes)
+	default:
+		return ""
+	}
+}
+
 // ColumnChunkInfo is per-column-chunk footer stats.
 type ColumnChunkInfo struct {
 	Name            string
@@ -42,6 +84,8 @@ type ColumnChunkInfo struct {
 	Min             string
 	Max             string
 	HasMinMax       bool
+	MinBound        Bound
+	MaxBound        Bound
 }
 
 // InspectFile reads Parquet footer metadata (schema, row groups, min/max).
@@ -103,8 +147,15 @@ func InspectFile(path string) (*FileInfo, error) {
 				}
 				if stats.HasMinMax() {
 					col.HasMinMax = true
-					col.Min = formatStatValue(stats.Type(), stats.EncodeMin())
-					col.Max = formatStatValue(stats.Type(), stats.EncodeMax())
+					col.MinBound = decodeBound(stats.Type(), stats.EncodeMin())
+					col.MaxBound = decodeBound(stats.Type(), stats.EncodeMax())
+					col.Min = col.MinBound.String()
+					col.Max = col.MaxBound.String()
+					// timestamps stored as INT64 ms: pretty-print using the existing helper
+					if stats.Type() == parquet.Types.Int64 {
+						col.Min = formatStatValue(stats.Type(), stats.EncodeMin())
+						col.Max = formatStatValue(stats.Type(), stats.EncodeMax())
+					}
 				}
 			}
 			rg.Columns = append(rg.Columns, col)
@@ -112,6 +163,43 @@ func InspectFile(path string) (*FileInfo, error) {
 		info.RowGroups = append(info.RowGroups, rg)
 	}
 	return info, nil
+}
+
+func decodeBound(typ parquet.Type, raw []byte) Bound {
+	if len(raw) == 0 {
+		return Bound{}
+	}
+	v := metadata.GetStatValue(typ, raw)
+	switch x := v.(type) {
+	case int64:
+		return Bound{Kind: BoundInt64, I64: x}
+	case int32:
+		return Bound{Kind: BoundInt64, I64: int64(x)}
+	case float32:
+		return Bound{Kind: BoundFloat64, F64: float64(x)}
+	case float64:
+		return Bound{Kind: BoundFloat64, F64: x}
+	case bool:
+		return Bound{Kind: BoundBool, Bool: x}
+	case []byte:
+		b := make([]byte, len(x))
+		copy(b, x)
+		return Bound{Kind: BoundBytes, Bytes: b}
+	default:
+		return Bound{}
+	}
+}
+
+func i64Bytes(v int64) []byte {
+	var b [8]byte
+	binary.LittleEndian.PutUint64(b[:], uint64(v))
+	return b[:]
+}
+
+func f64Bytes(v float64) []byte {
+	var b [8]byte
+	binary.LittleEndian.PutUint64(b[:], math.Float64bits(v))
+	return b[:]
 }
 
 func formatStatValue(typ parquet.Type, raw []byte) string {
