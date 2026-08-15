@@ -524,7 +524,7 @@ Keep `internal/` strict: the CLI and HTTP are thin. This is what you walk throug
 
 Each phase has a **learning goal**, **deliverable**, **tests**, and a **done when**. Do not start Phase N+1 until Phase N is demoable. Timeboxes are effort, not calendar promises — skip them if they get in the way, keep the sequence.
 
-**Progress:** Phase 0–3 are implemented (`tables`/`describe`, vectorized `--where` filters, zone-map catalog).
+**Progress:** Phase 0–5 are implemented (`tables`/`describe`, `--where`, `agg`, `sql`).
 
 ---
 
@@ -608,7 +608,7 @@ Each phase has a **learning goal**, **deliverable**, **tests**, and a **done whe
 - `Sort` + `Limit` (top-N: do not sort a billion rows if `LIMIT 20` — implement a heap for `ORDER BY x LIMIT k` as soon as it hurts).
 - CLI still flag-based is OK: `prism agg --group country --agg count,sum(amount_cents)`.
 
-**Done when:** grouped counts on `tiny` match pandas `groupby().agg()` bit-for-bit (int sums exact; avg within 1e-9 relative or compare via `SUM`/`COUNT` instead).
+**Done when:** grouped counts on `tiny` match pandas `groupby().agg()` bit-for-bit (int sums exact; avg within 1e-9 relative or compare via `SUM`/`COUNT` instead). **Shipped in Phase 4–5** (`prism agg`, `scripts/agg_oracle.py` on the committed fixture; same path works on `--scale tiny`).
 
 ---
 
@@ -626,7 +626,7 @@ Each phase has a **learning goal**, **deliverable**, **tests**, and a **done whe
 
 **Do not** parse SQL you cannot execute. Reject with a clear error (`JOIN not supported in v1`).
 
-**Done when:** a table-driven parser test covers every construct in §6, plus a folder of `testdata/sql/*.sql` that bind against `tiny`.
+**Done when:** a table-driven parser test covers every construct in §6, plus a folder of `testdata/sql/*.sql` that bind against `tiny`. **Shipped in Phase 4–5** (`testdata/sql/ok` + `reject`, dialect in `docs/sql.md`).
 
 ---
 

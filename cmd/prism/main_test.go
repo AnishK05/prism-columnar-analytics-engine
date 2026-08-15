@@ -32,6 +32,9 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(buf.String(), "describe") {
 		t.Fatal("help should mention describe")
 	}
+	if !strings.Contains(buf.String(), "agg") || !strings.Contains(buf.String(), "sql") {
+		t.Fatal("help should mention agg and sql")
+	}
 }
 
 func TestFlagsFirst(t *testing.T) {
@@ -94,5 +97,48 @@ func TestScanWhereTestdata(t *testing.T) {
 	}
 	if !strings.Contains(string(errb), "rows_kept=") {
 		t.Fatalf("expected scan stats, stderr:\n%s", errb)
+	}
+}
+
+func TestAggAndSQLTestdata(t *testing.T) {
+	dir := testdataTables(t)
+	oldOut, oldErr := os.Stdout, os.Stderr
+	defer func() { os.Stdout, os.Stderr = oldOut, oldErr }()
+	rOut, wOut, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rErr, wErr, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout, os.Stderr = wOut, wErr
+	runErr := run([]string{"agg", "--data-dir", dir, "--table", "events", "--group", "country", "--agg", "count", "--limit", "5"})
+	wOut.Close()
+	wErr.Close()
+	os.Stdout, os.Stderr = oldOut, oldErr
+	out, _ := io.ReadAll(rOut)
+	errb, _ := io.ReadAll(rErr)
+	if runErr != nil {
+		t.Fatalf("agg: %v\n%s", runErr, errb)
+	}
+	if !strings.Contains(string(out), "country") {
+		t.Fatalf("agg out:\n%s", out)
+	}
+
+	rOut, wOut, _ = os.Pipe()
+	rErr, wErr, _ = os.Pipe()
+	os.Stdout, os.Stderr = wOut, wErr
+	runErr = run([]string{"sql", "--data-dir", dir, "SELECT COUNT(*) FROM events"})
+	wOut.Close()
+	wErr.Close()
+	os.Stdout, os.Stderr = oldOut, oldErr
+	out, _ = io.ReadAll(rOut)
+	errb, _ = io.ReadAll(rErr)
+	if runErr != nil {
+		t.Fatalf("sql: %v\n%s", runErr, errb)
+	}
+	if !strings.Contains(string(out), "8192") {
+		t.Fatalf("sql COUNT(*) out:\n%s\nstderr:%s", out, errb)
 	}
 }

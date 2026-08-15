@@ -1,0 +1,2 @@
+-- SELECT *
+SELECT * FROM events LIMIT 5;
