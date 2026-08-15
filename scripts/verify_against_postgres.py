@@ -133,7 +133,7 @@ def normalize_rows(rows: list[list], ordered: bool) -> list[list]:
     return sorted(rows, key=sort_key)
 
 
-def run_prism(root: Path, data_dir: Path, sql: str) -> dict:
+def run_prism(root: Path, data_dir: Path, sql_file: Path) -> dict:
     cmd = prism_cmd(root) + [
         "sql",
         "--json",
@@ -141,7 +141,8 @@ def run_prism(root: Path, data_dir: Path, sql: str) -> dict:
         "0",
         "--data-dir",
         str(data_dir),
-        sql,
+        "--file",
+        str(sql_file),
     ]
     proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
     if proc.returncode != 0:
@@ -181,7 +182,7 @@ def main() -> int:
             path = root / q["file"]
             sql = path.read_text(encoding="utf-8")
             ordered = bool(q.get("ordered"))
-            prism = run_prism(root, data_dir, sql)
+            prism = run_prism(root, data_dir, path)
             if prism.get("truncated"):
                 print(f"{q['id']}: prism result truncated", file=sys.stderr)
                 failed += 1
