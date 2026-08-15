@@ -252,3 +252,55 @@ func TestScanLimitViaConsumer(t *testing.T) {
 		t.Fatalf("got %d rows", n)
 	}
 }
+
+func TestRowGroupSelectionSkipsUnreadGroups(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "t.parquet")
+	writeTenColParquet(t, path, 200, 50) // 4 row groups of 50
+	info, err := InspectFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.NumRowGroups < 2 {
+		t.Fatalf("row groups = %d", info.NumRowGroups)
+	}
+	fullBytes := int64(0)
+	for _, rg := range info.RowGroups {
+		fullBytes += rg.CompressedBytes
+	}
+
+	rdr, err := Open(context.Background(), []string{path}, Options{
+		Columns:   []string{"c0"},
+		BatchSize: 32,
+		RowGroups: map[string][]int{path: {0}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rdr.Close()
+	var n int64
+	for {
+		rec, err := rdr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		n += rec.NumRows()
+		rec.Release()
+	}
+	if n != 50 {
+		t.Fatalf("rows = %d, want 50 (first row group only)", n)
+	}
+	st := rdr.Stats()
+	if st.RowGroupsRead != 1 {
+		t.Fatalf("RowGroupsRead = %d, want 1", st.RowGroupsRead)
+	}
+	if st.RowGroupsSkipped != info.NumRowGroups-1 {
+		t.Fatalf("RowGroupsSkipped = %d, want %d", st.RowGroupsSkipped, info.NumRowGroups-1)
+	}
+	if st.CompressedBytes <= 0 || st.CompressedBytes >= fullBytes {
+		t.Fatalf("skipped scan bytes=%d full=%d", st.CompressedBytes, fullBytes)
+	}
+}

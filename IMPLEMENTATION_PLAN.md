@@ -524,7 +524,7 @@ Keep `internal/` strict: the CLI and HTTP are thin. This is what you walk throug
 
 Each phase has a **learning goal**, **deliverable**, **tests**, and a **done when**. Do not start Phase N+1 until Phase N is demoable. Timeboxes are effort, not calendar promises — skip them if they get in the way, keep the sequence.
 
-**Progress:** Phase 0–5 are implemented (`tables`/`describe`, `--where`, `agg`, `sql`).
+**Progress:** Phase 0–7 are implemented (`tables`/`describe`, `--where`, `agg`, `sql`, `explain`, row-group skipping).
 
 ---
 
@@ -642,7 +642,7 @@ Each phase has a **learning goal**, **deliverable**, **tests**, and a **done whe
 - `EXPLAIN` text format first; JSON format for the UI (`explain: true` on `/query`).
 - Golden tests: SQL in, plan string out.
 
-**Done when:** for Q2, EXPLAIN shows pushed `ts` predicate and a pruned column list. (Actual skipping numbers come once scan uses stats in Phase 7.)
+**Done when:** for Q2, EXPLAIN shows pushed `ts` predicate and a pruned column list. (Actual skipping numbers come once scan uses stats in Phase 7.) **Shipped in Phase 6–7** (`prism explain`, text + JSON; Q2 golden in `internal/plan`).
 
 ---
 
@@ -660,7 +660,7 @@ Each phase has a **learning goal**, **deliverable**, **tests**, and a **done whe
 - Count `row_groups_total` vs `row_groups_read`; surface in stats and EXPLAIN.
 - Tests with a fixture file engineered so group 0 is `ts` in 2020 and group 1 is `ts` in 2024; a 2024 predicate must not read group 0 (assert via a test hook / bytes / callback).
 
-**Done when:** Q2 on `dev` reads a small fraction of row groups; test hook proves a skip.
+**Done when:** Q2 on `dev` reads a small fraction of row groups; test hook proves a skip. **Shipped in Phase 6–7** (fixture: 2020 vs 2024 row groups; testdata Q2 7-day window keeps 1 of 4 groups). Skipping on a generated `dev` dataset is still the Phase 10/11 demo.
 
 ---
 

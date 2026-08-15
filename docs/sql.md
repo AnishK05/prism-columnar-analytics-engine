@@ -44,4 +44,5 @@ LIMIT 10;
 go run .\cmd\prism -- sql --data-dir testdata\tables "SELECT COUNT(*) FROM events"
 go run .\cmd\prism -- sql --file testdata\sql\ok\resume.sql --data-dir testdata\tables
 go run .\cmd\prism -- sql --ast "SELECT * FROM events WHERE country = 'US' LIMIT 5"
+go run .\cmd\prism -- explain --data-dir testdata\tables --file testdata\sql\ok\q2.sql
 ```

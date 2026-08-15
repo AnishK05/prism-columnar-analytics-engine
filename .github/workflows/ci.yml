@@ -32,4 +32,5 @@ jobs:
           go run ./cmd/prism agg --data-dir testdata/tables --table events --group country --agg 'count,sum(amount_cents)' --order count --desc --limit 5
           go run ./cmd/prism sql --data-dir testdata/tables "SELECT COUNT(*) FROM events"
           go run ./cmd/prism sql --data-dir testdata/tables --file testdata/sql/ok/resume.sql
+          go run ./cmd/prism explain --data-dir testdata/tables --file testdata/sql/ok/q2.sql
           python scripts/agg_oracle.py --data-dir testdata/tables

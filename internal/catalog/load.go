@@ -219,40 +219,5 @@ func (t *Table) Clustering(col string) (ok bool, detail string) {
 }
 
 func compareBounds(a, b parquetscan.Bound) (int, error) {
-	if a.Kind != b.Kind {
-		return 0, fmt.Errorf("incomparable stats %v vs %v", a.Kind, b.Kind)
-	}
-	switch a.Kind {
-	case parquetscan.BoundInt64:
-		switch {
-		case a.I64 < b.I64:
-			return -1, nil
-		case a.I64 > b.I64:
-			return 1, nil
-		default:
-			return 0, nil
-		}
-	case parquetscan.BoundFloat64:
-		switch {
-		case a.F64 < b.F64:
-			return -1, nil
-		case a.F64 > b.F64:
-			return 1, nil
-		default:
-			return 0, nil
-		}
-	case parquetscan.BoundBytes:
-		return strings.Compare(string(a.Bytes), string(b.Bytes)), nil
-	case parquetscan.BoundBool:
-		ai, bi := 0, 0
-		if a.Bool {
-			ai = 1
-		}
-		if b.Bool {
-			bi = 1
-		}
-		return ai - bi, nil
-	default:
-		return 0, fmt.Errorf("empty bound")
-	}
+	return a.Cmp(b)
 }

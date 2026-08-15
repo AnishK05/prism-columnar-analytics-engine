@@ -15,6 +15,7 @@ import (
 	"github.com/AnishK05/prism-columnar-analytics-engine/internal/expr"
 	"github.com/AnishK05/prism-columnar-analytics-engine/internal/kernel"
 	"github.com/AnishK05/prism-columnar-analytics-engine/internal/parquetscan"
+	"github.com/AnishK05/prism-columnar-analytics-engine/internal/plan"
 	"github.com/AnishK05/prism-columnar-analytics-engine/internal/sql"
 	"github.com/AnishK05/prism-columnar-analytics-engine/internal/version"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -52,6 +53,8 @@ func run(args []string) error {
 		return cmdAgg(args[1:])
 	case "sql":
 		return cmdSQL(args[1:])
+	case "explain":
+		return cmdExplain(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], helpText)
 	}
@@ -70,6 +73,7 @@ Commands:
   scan       Read selected columns (optional --where) and print rows
   agg        Hash aggregate (flag-based GROUP BY)
   sql        Parse/bind/run a Prism SQL SELECT
+  explain    Print the physical plan (optional --analyze / --json)
   help       Show this message
 
 Examples:
@@ -81,6 +85,7 @@ Examples:
   go run ./cmd/prism scan --table events --where "amount_cents > 0 AND country = 'US'" --columns country,amount_cents
   go run ./cmd/prism agg --table events --group country --agg count,sum(amount_cents) --order count --desc --limit 10
   go run ./cmd/prism sql --data-dir testdata/tables "SELECT country, COUNT(*) FROM events GROUP BY country ORDER BY COUNT(*) DESC LIMIT 5"
+  go run ./cmd/prism explain --data-dir testdata/tables --file testdata/sql/ok/q2.sql
 `
 
 func printHelp(w io.Writer) {
@@ -271,17 +276,11 @@ func cmdScan(args []string) error {
 	}
 
 	var files []string
-	var err error
+	var rowGroups map[string][]int
 	if *filePath != "" {
 		files = []string{*filePath}
-	} else {
-		if *table == "" {
-			return fmt.Errorf("scan: --table or --file is required")
-		}
-		files, err = catalog.TableFiles(catalog.ResolveDataDir(*dataDir), *table)
-		if err != nil {
-			return err
-		}
+	} else if *table == "" {
+		return fmt.Errorf("scan: --table or --file is required")
 	}
 
 	var columns []string
@@ -305,10 +304,38 @@ func cmdScan(args []string) error {
 		scanCols = unionStrings(scanCols, pred.Columns())
 	}
 
+	if *filePath == "" {
+		cat, err := catalog.Load(catalog.ResolveDataDir(*dataDir))
+		if err != nil {
+			return err
+		}
+		tbl, err := cat.Table(*table)
+		if err != nil {
+			return err
+		}
+		node := plan.Build(plan.Input{
+			Table:    tbl,
+			Where:    pred,
+			ScanCols: scanCols,
+			Project:  columns,
+			Limit:    *limit,
+		})
+		req := node.Request(*batch)
+		files = tbl.Files
+		rowGroups = req.RowGroups
+		if req.Empty {
+			rowGroups = map[string][]int{}
+			for _, f := range tbl.Files {
+				rowGroups[f] = []int{}
+			}
+		}
+	}
+
 	ctx := context.Background()
 	rdr, err := parquetscan.Open(ctx, files, parquetscan.Options{
 		Columns:   scanCols,
 		BatchSize: *batch,
+		RowGroups: rowGroups,
 	})
 	if err != nil {
 		return err
@@ -381,9 +408,9 @@ func cmdScan(args []string) error {
 	tw.Flush()
 
 	st := rdr.Stats()
-	fmt.Fprintf(os.Stderr, "\nscan: printed=%d rows_kept=%d rows_read=%d batches=%d columns=%d (%s) row_groups=%d compressed_selected=%s files=%d\n",
+	fmt.Fprintf(os.Stderr, "\nscan: printed=%d rows_kept=%d rows_read=%d batches=%d columns=%d (%s) row_groups_read=%d skipped=%d compressed_selected=%s files=%d\n",
 		printed, rowsKept, st.RowsRead, st.BatchesEmitted, st.ColumnsRead, strings.Join(st.ColumnNames, ","),
-		st.RowGroupsRead, parquetscan.FormatBytes(st.CompressedBytes), st.FilesOpened)
+		st.RowGroupsRead, st.RowGroupsSkipped, parquetscan.FormatBytes(st.CompressedBytes), st.FilesOpened)
 	return nil
 }
 
@@ -451,23 +478,25 @@ func cmdAgg(args []string) error {
 			orderKeys = append(orderKeys, kernel.OrderKey{Name: name, Desc: desc || *descAll})
 		}
 	}
-	res, err := exec.Run(context.Background(), exec.Request{
-		Table:     tbl,
-		Where:     pred,
-		GroupBy:   keys,
-		Aggs:      aggs,
-		Order:     orderKeys,
-		Limit:     *limit,
-		BatchSize: *batch,
+	node := plan.Build(plan.Input{
+		Table:   tbl,
+		Where:   pred,
+		GroupBy: keys,
+		Aggs:    aggs,
+		Order:   orderKeys,
+		Limit:   *limit,
+		IsAgg:   true,
 	})
+	req := node.Request(*batch)
+	res, err := exec.Run(context.Background(), req)
 	if err != nil {
 		return err
 	}
 	defer res.Record.Release()
 	printRecord(os.Stdout, res.Record, res.Record.NumRows())
 	st := res.Stats
-	fmt.Fprintf(os.Stderr, "\nagg: rows=%d groups=%d rows_read=%d batches=%d columns=%d row_groups=%d files=%d\n",
-		res.Record.NumRows(), res.Groups, st.RowsRead, st.BatchesEmitted, st.ColumnsRead, st.RowGroupsRead, st.FilesOpened)
+	fmt.Fprintf(os.Stderr, "\nagg: rows=%d groups=%d rows_read=%d batches=%d columns=%d row_groups_read=%d skipped=%d files=%d\n",
+		res.Record.NumRows(), res.Groups, st.RowsRead, st.BatchesEmitted, st.ColumnsRead, st.RowGroupsRead, st.RowGroupsSkipped, st.FilesOpened)
 	return nil
 }
 
@@ -478,6 +507,9 @@ func cmdSQL(args []string) error {
 	filePath := fs.String("file", "", "read SQL from a file")
 	astOnly := fs.Bool("ast", false, "print the parsed AST and exit")
 	bindOnly := fs.Bool("bind-only", false, "parse+bind and print a summary (do not execute)")
+	doExplain := fs.Bool("explain", false, "print the physical plan instead of rows")
+	analyze := fs.Bool("analyze", false, "run the query and include scan stats in EXPLAIN")
+	asJSON := fs.Bool("json", false, "EXPLAIN as JSON")
 	batch := fs.Int64("batch-size", parquetscan.DefaultBatchSize, "Arrow batch size")
 	if err := fs.Parse(flagsFirst(args)); err != nil {
 		return err
@@ -524,17 +556,97 @@ func cmdSQL(args []string) error {
 		fmt.Printf("project: %s\n", strings.Join(bound.Project, ", "))
 		return nil
 	}
-	req := bound.Request()
-	req.BatchSize = *batch
+	node := plan.Build(boundInput(bound))
+	if *doExplain && !*analyze {
+		return printExplain(node, *asJSON)
+	}
+	req := node.Request(*batch)
 	res, err := exec.Run(context.Background(), req)
 	if err != nil {
 		return err
 	}
 	defer res.Record.Release()
+	if *doExplain || *analyze {
+		node.AttachStats(res.Stats)
+		return printExplain(node, *asJSON)
+	}
 	printRecord(os.Stdout, res.Record, res.Record.NumRows())
 	st := res.Stats
-	fmt.Fprintf(os.Stderr, "\nsql: rows=%d groups=%d rows_read=%d batches=%d columns=%d row_groups=%d files=%d\n",
-		res.Record.NumRows(), res.Groups, st.RowsRead, st.BatchesEmitted, st.ColumnsRead, st.RowGroupsRead, st.FilesOpened)
+	fmt.Fprintf(os.Stderr, "\nsql: rows=%d groups=%d rows_read=%d batches=%d columns=%d row_groups_read=%d skipped=%d files=%d\n",
+		res.Record.NumRows(), res.Groups, st.RowsRead, st.BatchesEmitted, st.ColumnsRead, st.RowGroupsRead, st.RowGroupsSkipped, st.FilesOpened)
+	return nil
+}
+
+func boundInput(b *sql.BoundQuery) plan.Input {
+	return plan.Input{
+		Table:    b.Table,
+		Where:    b.Where,
+		ScanCols: b.ScanCols,
+		GroupBy:  b.GroupBy,
+		Aggs:     b.Aggs,
+		Project:  b.Project,
+		Order:    b.Order,
+		Limit:    b.Limit,
+		IsAgg:    b.IsAgg,
+	}
+}
+
+func cmdExplain(args []string) error {
+	fs := flag.NewFlagSet("explain", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	dataDir := fs.String("data-dir", "", "tables root")
+	filePath := fs.String("file", "", "read SQL from a file")
+	analyze := fs.Bool("analyze", false, "execute and include bytes/rows")
+	asJSON := fs.Bool("json", false, "JSON plan")
+	batch := fs.Int64("batch-size", parquetscan.DefaultBatchSize, "Arrow batch size")
+	if err := fs.Parse(flagsFirst(args)); err != nil {
+		return err
+	}
+	src := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if *filePath != "" {
+		b, err := os.ReadFile(*filePath)
+		if err != nil {
+			return err
+		}
+		src = string(b)
+	}
+	if src == "" {
+		return fmt.Errorf("explain: query required")
+	}
+	q, err := sql.Parse(src)
+	if err != nil {
+		return err
+	}
+	cat, err := catalog.Load(catalog.ResolveDataDir(*dataDir))
+	if err != nil {
+		return err
+	}
+	bound, err := sql.Bind(q, cat)
+	if err != nil {
+		return err
+	}
+	node := plan.Build(boundInput(bound))
+	if *analyze {
+		res, err := exec.Run(context.Background(), node.Request(*batch))
+		if err != nil {
+			return err
+		}
+		node.AttachStats(res.Stats)
+		res.Record.Release()
+	}
+	return printExplain(node, *asJSON)
+}
+
+func printExplain(node *plan.Node, asJSON bool) error {
+	if asJSON {
+		s, err := node.JSONString()
+		if err != nil {
+			return err
+		}
+		fmt.Println(s)
+		return nil
+	}
+	fmt.Println(node.Text())
 	return nil
 }
 
