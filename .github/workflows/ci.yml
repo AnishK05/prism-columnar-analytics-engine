@@ -67,3 +67,11 @@ jobs:
         run: |
           go run ./cmd/prism bench --scale testdata --engine all --repeat 3 --out /tmp/prism-bench.json
           go run ./bench --scale testdata --engine vectorized --repeat 1 --breakdown=false
+      - name: prismd smoke
+        run: |
+          go run ./cmd/prismd --listen 127.0.0.1:18080 --data-dir testdata/tables --timeout 30s &
+          for i in $(seq 1 50); do curl -sf http://127.0.0.1:18080/health && break; sleep 0.2; done
+          curl -sf http://127.0.0.1:18080/tables >/dev/null
+          curl -sf -X POST http://127.0.0.1:18080/query \
+            -H 'Content-Type: application/json' \
+            -d '{"sql":"SELECT country, COUNT(*) FROM events GROUP BY country ORDER BY COUNT(*) DESC LIMIT 5","explain":true}'

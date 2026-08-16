@@ -68,6 +68,10 @@ func TestLoadTestdata(t *testing.T) {
 	if !ok || minTS != 1704067200000 || maxTS != 1735603199000 {
 		t.Fatalf("TimestampRangeMS %d %d ok=%v", minTS, maxTS, ok)
 	}
+	info := events.Info()
+	if info.Rows != 8192 || info.Files != 2 || info.MinTSMs == nil || *info.MinTSMs != minTS {
+		t.Fatalf("Info %+v", info)
+	}
 }
 
 func TestLoadMissingDir(t *testing.T) {

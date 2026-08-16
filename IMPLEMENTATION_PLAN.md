@@ -524,7 +524,7 @@ Keep `internal/` strict: the CLI and HTTP are thin. This is what you walk throug
 
 Each phase has a **learning goal**, **deliverable**, **tests**, and a **done when**. Do not start Phase N+1 until Phase N is demoable. Timeboxes are effort, not calendar promises — skip them if they get in the way, keep the sequence.
 
-**Progress:** Phase 0–11 are implemented (`tables`/`describe`, `--where`, `agg`, `sql`, `explain`, skip, dual engine, `--jobs`, Postgres oracle scripts, `prism bench`). Laptop-scale generation and resume timings are still measured on the Windows machine — do not invent them.
+**Progress:** Phase 0–12 are implemented (`tables`/`describe`, `--where`, `agg`, `sql`, `explain`, skip, dual engine, `--jobs`, Postgres oracle, `prism bench`, `prismd`). Laptop-scale generation and resume timings are still measured on the Windows machine — do not invent them.
 
 ---
 
@@ -746,7 +746,7 @@ POST /bench      { scale, query_id }          # optional, can stay CLI-only
 - Errors as JSON `{ error, pos? }`.
 - Never return huge JSON results; default `limit` 100 for non-agg, unlimited for small agg results with a hard cap (e.g. 100k).
 
-**Done when:** `curl` a GROUP BY and get JSON + profile.
+**Done when:** `curl` a GROUP BY and get JSON + profile. **Shipped in Phase 12** (`cmd/prismd`, CORS, 60s timeout, row cap, `docs/api.md`). Live `/bench` stays CLI-backed; `GET /bench` serves `sample.json`.
 
 ---
 

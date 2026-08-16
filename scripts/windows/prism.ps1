@@ -73,7 +73,7 @@ prism.ps1 commands:
   data-dev     Generate 1M-row events table
   data-laptop  Generate 10M-row events table (stop before the machine swaps)
   test         go test ./...
-  engine       Phase 12 (prints version for now)
+  engine       Start prismd on http://127.0.0.1:8080
   web          Phase 13 (not implemented)
   verify       Postgres oracle: testdata + tiny (compose up, load, compare Q1-Q8)
   bench-dev    prism bench --scale=dev --engine=all --repeat=5
@@ -104,9 +104,14 @@ prism.ps1 commands:
         Invoke-Go test ./...
     }
     "engine" {
-        Write-Host "HTTP API (prismd) is Phase 12. CLI scan works now:"
-        Invoke-Go run ./cmd/prism -- version
-        Write-Host "Example: go run ./cmd/prism scan --table events --columns country,amount_cents --limit 5"
+        $data = Join-Path $RepoRoot "testdata\tables"
+        $generated = Join-Path $RepoRoot "data\tables\events"
+        if (Test-Path $generated) {
+            $data = Join-Path $RepoRoot "data\tables"
+        }
+        Write-Host "Starting prismd on http://127.0.0.1:8080 (Ctrl+C to stop)"
+        Write-Host "data-dir: $data"
+        Invoke-Go run ./cmd/prismd -- --listen 127.0.0.1:8080 --data-dir $data
     }
     "web" {
         Write-Host "Next.js workbench is Phase 13. Skip for now."
