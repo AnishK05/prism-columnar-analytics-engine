@@ -74,7 +74,7 @@ prism.ps1 commands:
   data-laptop  Generate 10M-row events table (stop before the machine swaps)
   test         go test ./...
   engine       Start prismd on http://127.0.0.1:8080
-  web          Phase 13 (not implemented)
+  web          Next.js workbench on http://127.0.0.1:3000
   verify       Postgres oracle: testdata + tiny (compose up, load, compare Q1-Q8)
   bench-dev    prism bench --scale=dev --engine=all --repeat=5
 "@
@@ -83,6 +83,14 @@ prism.ps1 commands:
         Invoke-Go version
         Invoke-Py --version
         Invoke-Py -m pip install -r (Join-Path $RepoRoot "scripts\requirements.txt")
+        if (Get-Command npm -ErrorAction SilentlyContinue) {
+            Push-Location (Join-Path $RepoRoot "web")
+            npm install
+            Pop-Location
+        }
+        else {
+            Write-Warning "npm not found; the workbench needs Node.js LTS (winget install OpenJS.NodeJS.LTS)."
+        }
         if (Get-Command docker -ErrorAction SilentlyContinue) {
             docker compose version
         }
@@ -114,7 +122,19 @@ prism.ps1 commands:
         Invoke-Go run ./cmd/prismd -- --listen 127.0.0.1:8080 --data-dir $data
     }
     "web" {
-        Write-Host "Next.js workbench is Phase 13. Skip for now."
+        if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+            throw "npm not found. Install Node.js LTS: winget install OpenJS.NodeJS.LTS"
+        }
+        $web = Join-Path $RepoRoot "web"
+        Set-Location $web
+        if (-not (Test-Path (Join-Path $web "node_modules"))) {
+            npm install
+        }
+        if (-not $env:NEXT_PUBLIC_API) {
+            $env:NEXT_PUBLIC_API = "http://127.0.0.1:8080"
+        }
+        Write-Host "Workbench http://127.0.0.1:3000  (prismd must already be on $($env:NEXT_PUBLIC_API))"
+        npm run dev
     }
     "verify" {
         Wait-Postgres

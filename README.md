@@ -5,72 +5,71 @@ A miniature **vectorized, single-node OLAP engine** for learning how analytical 
 **Windows is the supported local setup.** Follow **[docs/WINDOWS.md](docs/WINDOWS.md)** (native PowerShell + Docker Desktop; WSL is optional).
 
 Blueprint: **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)** (decisions locked in §20).  
-Interview script (fill after measurement): **[WRITEUP.md](./WRITEUP.md)**.
+How a query runs: **[docs/architecture.md](docs/architecture.md)**.  
+Interview script: **[WRITEUP.md](./WRITEUP.md)**.
 
-## What’s here now (Phase 0–12)
+## What’s here (v1 / Phase 0–14)
 
-- `prism tables` / `prism describe` — catalog with cached row-group min/max (zone maps); `--json` includes ts range for `manifest.json`
-- `prism inspect` / `prism scan` — Parquet → Arrow, column pruning
-- `prism scan --where` — vectorized filter (SQL three-valued logic) with row-group skipping
-- `prism agg` — hash aggregate (`COUNT`/`SUM`/`AVG`/`MIN`/`MAX`), sort, limit
-- `prism sql` — Prism SQL lexer/parser/binder + the same pipeline ([docs/sql.md](docs/sql.md))
-- `prism explain` — physical plan (text or JSON); `--analyze` adds bytes/rows
-- Dual engine: `--engine=vectorized|row` (same skip/prune; row path is a per-row loop)
-- Parallel row-group workers: `--jobs` / `PRISM_PARALLELISM` (partial + merge aggregation)
-- Row-group skipping from Parquet min/max (zone maps); Q2 on the fixture keeps 1 of 4 groups
-- Python generator for synthetic `events` / `users` / `products` (batched writes, `--seed`, tqdm)
-- PostgreSQL oracle: `scripts/load_postgres.py` + `scripts/verify_against_postgres.py` (tiny/dev, never laptop)
-- `prism bench` — hot-cache protocol, 3-way breakdown, JSON for the UI (`bench/results/sample.json`)
-- `prismd` — HTTP API for the workbench ([docs/api.md](docs/api.md)): `/health`, `/tables`, `/query`, `/explain`, `/bench`
-- Committed fixture: `testdata/tables` (8,192 `events` rows, `ts` clustered)
+- Catalog + zone maps: `prism tables` / `prism describe`
+- Vectorized scan, filter, hash agg, sort, limit over Arrow
+- Hand-rolled SQL subset ([docs/sql.md](docs/sql.md))
+- Dual engine (`--engine=vectorized|row`) and `--jobs` row-group workers
+- Postgres oracle on `tiny`/`dev` (never laptop)
+- `prism bench` + checked-in `bench/results/sample.json`
+- `prismd` HTTP API ([docs/api.md](docs/api.md))
+- Three-page Next.js workbench (`web/`)
 
 ```bash
 go test ./...
-go run ./cmd/prism tables --data-dir testdata/tables
-go run ./cmd/prism describe events --json --data-dir testdata/tables
-go run ./cmd/prism sql --data-dir testdata/tables "SELECT country, COUNT(*) FROM events GROUP BY country ORDER BY COUNT(*) DESC LIMIT 5"
-go run ./cmd/prism explain --data-dir testdata/tables --file testdata/sql/ok/q2.sql
-go run ./cmd/prism bench --scale testdata --repeat 3
 go run ./cmd/prismd --listen 127.0.0.1:8080 --data-dir testdata/tables
-# in another terminal:
-curl -s -X POST http://127.0.0.1:8080/query -H 'Content-Type: application/json' \
-  -d '{"sql":"SELECT country, COUNT(*) FROM events GROUP BY country ORDER BY COUNT(*) DESC LIMIT 5","explain":true}'
+# other terminal
+cd web && npm install && NEXT_PUBLIC_API=http://127.0.0.1:8080 npm run dev
+# open http://127.0.0.1:3000  — Run Q2, see 3 of 4 row groups skipped
 ```
 
-On Windows PowerShell, use `.\` paths; see `docs/WINDOWS.md`. Oracle: `docs/WINDOWS.md` §5. Benches: [`docs/benchmarks.md`](docs/benchmarks.md). API: [`docs/api.md`](docs/api.md).
+On Windows PowerShell use `.\` paths and `.\scripts\windows\prism.ps1 engine` / `web`.
 
-Each parallel worker opens its own Parquet file handle for one row group, so there is no shared Arrow reader lock. Speedup vs `--jobs=1` is measured on `dev`/`laptop` with `prism bench` — **do not put a number on the resume until laptop-scale is run on the Windows machine**.
+## Architecture
 
-The Next.js workbench is not implemented yet (`prismd` is ready for it).
+```mermaid
+flowchart LR
+  UI[Next.js workbench] -->|HTTP JSON| API[prismd]
+  API --> Eng[engine.Run]
+  SQL[prism sql / explain / bench] --> Eng
+  Eng --> Opt[prune / push / skip]
+  Opt --> Vec[vectorized kernels]
+  Opt --> Row[row-at-a-time]
+  Vec --> Scan[Parquet scan]
+  Row --> Scan
+  Scan --> Files["data/tables/*.parquet"]
+  Gen[Python generator] --> Files
+  PG[Postgres] -.->|oracle only| Gen
+```
 
-## Resume line (placeholders — rewrite after Phase 11)
+Details: [docs/architecture.md](docs/architecture.md).
+
+<img src="docs/images/workbench-q2.png" alt="Workbench after running Q2: 3 of 4 row groups skipped" />
+
+## Resume line (placeholders)
 
 > Engineered a vectorized, single-node OLAP engine in Go querying Parquet via Apache Arrow, with predicate pushdown, column pruning, and row-group skipping, sustaining 100M+ rows/query at 10x a row-at-a-time baseline
 
-Those numbers are a direction, not a quota. Measure on this laptop, name the query and baseline, then replace.
+Those numbers are a **direction**. Measure `--scale laptop` on the Windows machine, name the query and the **row-naive** baseline, then replace. Do not copy testdata chart timings onto a resume. See [docs/benchmarks.md](docs/benchmarks.md).
 
 ## Stack (locked)
 
-Go 1.22 · Apache Arrow Go **v18.0.0** · Apache Parquet · PostgreSQL (correctness oracle only) · Python / NumPy / PyArrow · Next.js / TypeScript (later) · Docker Desktop
+Go 1.22 · Apache Arrow Go **v18.0.0** · Apache Parquet · PostgreSQL (oracle only) · Python / NumPy / PyArrow · Next.js / TypeScript · Docker Desktop (Postgres)
 
-Pinned `github.com/apache/arrow-go/v18 v18.0.0` so Go 1.22 works. Newer Arrow Go releases need a newer toolchain.
+No DuckDB, no joins in v1, no license file.
 
 ## Status
 
 | Phase | Description | State |
 |---|---|---|
 | Plan | Blueprint + Windows runbook | Done |
-| 0 | Scaffold, CLI, Compose, CI | Done |
-| 1 | Parquet → Arrow scan + generator | Done |
-| 2 | Catalog stats, tables/describe | Done |
-| 3 | Vectorized `--where` filters | Done |
-| 4 | Hash aggregate, sort, limit | Done |
-| 5 | SQL lexer / parser / binder | Done |
-| 6 | Planner, optimizer, EXPLAIN | Done |
-| 7 | Row-group skipping (zone maps) | Done |
-| 8 | Dual engine (vectorized + row) | Done |
-| 9 | Parallel row-group workers | Done |
-| 10 | Postgres oracle + laptop-scale generator | Done (laptop row count is still a Windows-machine measurement) |
-| 11 | Benchmark harness | Done (sample.json is testdata; resume numbers stay placeholders) |
-| 12 | HTTP API (`prismd`) | Done |
-| 13+ | Next.js workbench, writeup numbers | Not started |
+| 0–9 | Scan through parallel dual engine | Done |
+| 10 | Postgres oracle + generator | Done (laptop row count is a Windows-machine measurement) |
+| 11 | Bench harness | Done (sample.json is testdata) |
+| 12 | `prismd` HTTP API | Done |
+| 13 | Next.js workbench | Done |
+| 14 | Portfolio polish | Done (resume numbers still placeholders) |
