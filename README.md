@@ -50,6 +50,8 @@ Details: [docs/architecture.md](docs/architecture.md).
 
 <img src="docs/images/workbench-q2.png" alt="Workbench after running Q2: 3 of 4 row groups skipped" />
 
+Q2 on the committed fixture keeps 1 of 4 row groups. Plan tree and testdata bench charts: [`docs/images/plan-q2.png`](docs/images/plan-q2.png), [`docs/images/bench.png`](docs/images/bench.png). Q6 is the resume-style GROUP BY and does not skip here ([`docs/images/workbench-q6.png`](docs/images/workbench-q6.png)).
+
 ## Resume line (placeholders)
 
 > Engineered a vectorized, single-node OLAP engine in Go querying Parquet via Apache Arrow, with predicate pushdown, column pruning, and row-group skipping, sustaining 100M+ rows/query at 10x a row-at-a-time baseline
