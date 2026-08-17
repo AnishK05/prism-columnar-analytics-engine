@@ -32,6 +32,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - name: Go tests
         run: go test ./...
       - name: Python generator smoke
@@ -75,3 +80,8 @@ jobs:
           curl -sf -X POST http://127.0.0.1:18080/query \
             -H 'Content-Type: application/json' \
             -d '{"sql":"SELECT country, COUNT(*) FROM events GROUP BY country ORDER BY COUNT(*) DESC LIMIT 5","explain":true}'
+      - name: Workbench build
+        working-directory: web
+        run: |
+          npm ci
+          npm run build

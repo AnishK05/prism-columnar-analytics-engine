@@ -524,7 +524,7 @@ Keep `internal/` strict: the CLI and HTTP are thin. This is what you walk throug
 
 Each phase has a **learning goal**, **deliverable**, **tests**, and a **done when**. Do not start Phase N+1 until Phase N is demoable. Timeboxes are effort, not calendar promises — skip them if they get in the way, keep the sequence.
 
-**Progress:** Phase 0–12 are implemented (`tables`/`describe`, `--where`, `agg`, `sql`, `explain`, skip, dual engine, `--jobs`, Postgres oracle, `prism bench`, `prismd`). Laptop-scale generation and resume timings are still measured on the Windows machine — do not invent them.
+**Progress:** Phase 0–14 are implemented (engine through `prismd` + three-page workbench + portfolio docs). Laptop-scale generation and resume timings are still measured on the Windows machine — do not invent them.
 
 ---
 
@@ -762,7 +762,7 @@ POST /bench      { scale, query_id }          # optional, can stay CLI-only
 
 Visual design: clean dark-ish dashboard, not a design-system science fair. Table names + schema in a sidebar.
 
-**Done when:** a stranger following `docs/WINDOWS.md` can compose-up (or run engine+web natively), open the UI, run Q6, and *see* that most row groups were skipped.
+**Done when:** a stranger following `docs/WINDOWS.md` can compose-up (or run engine+web natively), open the UI, run Q6, and *see* that most row groups were skipped. **Shipped in Phase 13** (three pages, sample Q1–Q8). On the 2024-only fixture, **Q2** is the skip demo (3 of 4 groups); Q6 is the resume GROUP BY and does not skip a full-year `ts` predicate — the workbench and `docs/WINDOWS.md` say that explicitly.
 
 ---
 
@@ -775,6 +775,8 @@ Visual design: clean dark-ish dashboard, not a design-system science fair. Table
 - **No license file** unless you later choose one.
 - Fill `WRITEUP.md`: what you built, what you measured on this laptop, what you would do next (joins, spill, cost-based).
 - Optional: blog post. High ROI for intern recruiting.
+
+**Shipped in Phase 14** (architecture page, README diagram, workbench screenshots, WRITEUP filled except laptop numbers). The v1 “done” box for measured resume figures stays open until Windows `laptop` bench.
 
 ---
 

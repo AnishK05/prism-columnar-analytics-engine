@@ -4,7 +4,7 @@ This is the **canonical local setup** for Prism. The engine is meant to be devel
 
 Native PowerShell + Docker Desktop is first-class. WSL2 is optional.
 
-> **Status (Phase 0–12):** CLI through `sql` / `explain` / `bench` works, and `prismd` serves `/health` `/tables` `/query` on `http://127.0.0.1:8080`. Dual engine, `--jobs`, Postgres oracle, and the hot-cache bench harness are on. The Next.js workbench is Phase 13. Resume timings stay placeholders until you run `--scale laptop` on this machine.
+> **Status (Phase 0–14):** CLI, `prismd`, and the three-page Next.js workbench are in. Dual engine, `--jobs`, Postgres oracle, and the hot-cache bench harness are on. Resume timings stay placeholders until you run `--scale laptop` on this machine.
 
 ---
 
@@ -18,8 +18,7 @@ Install these on Windows (Win10/11, 64-bit). **winget** is the default path; the
 | Go 1.22+ | engine (`apache/arrow-go` **v18.0.0** is pinned; it supports Go 1.22) | `winget install GoLang.Go` |
 | Python 3.11+ | data generator | `winget install Python.Python.3.12` |
 | Docker Desktop | PostgreSQL oracle (`prism.ps1 verify`) | `winget install Docker.DockerDesktop` |
-
-Node.js is **not** needed until Phase 13 (workbench).
+| Node.js LTS | Next.js workbench | `winget install OpenJS.NodeJS.LTS` |
 
 Then **restart the terminal** (and reboot once after Docker Desktop if it asks).
 
@@ -29,6 +28,8 @@ Confirm in **PowerShell**:
 git --version
 go version
 py --version
+node --version
+npm --version
 docker version
 docker compose version
 ```
@@ -96,6 +97,8 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 .\scripts\windows\prism.ps1 verify
 .\scripts\windows\prism.ps1 bench-dev
 .\scripts\windows\prism.ps1 engine
+# second terminal:
+.\scripts\windows\prism.ps1 web
 ```
 
 The `.ps1` file wraps the commands below. Raw `go` / `py` is the source of truth.
@@ -218,11 +221,29 @@ Contract: [`docs/api.md`](api.md). CORS is `*` so the Phase 13 workbench on `:30
 
 `GET /bench` returns `bench/results/sample.json` (UI format). Live benches stay on `prism bench`.
 
-### Not in this phase
+### 8. Next.js workbench
 
-| Command | When |
-|---|---|
-| Next.js workbench | Phase 13 |
+Need Node.js LTS. In a **second** terminal, with prismd already running:
+
+```powershell
+cd web
+npm install
+$env:NEXT_PUBLIC_API = "http://127.0.0.1:8080"
+npm run dev
+```
+
+Or `.\scripts\windows\prism.ps1 web`. Open **http://127.0.0.1:3000**.
+
+Five-minute demo:
+
+1. Sidebar shows `events` (8,192 rows, 4 row groups) and the schema.
+2. Workbench defaults to **Q2**. Click **Run**. The green banner should say **skipped 3 of 4 row groups**.
+3. Open **Plan**. You should see `ParquetScan` with `kept=1`, `skipped=3`, `pruned` columns, and the pushed `ts` predicate.
+4. Switch the sample to **Q6**, Run. That is the resume-style GROUP BY. On this 2024-only fixture the year-start `ts` predicate does **not** skip — that is the clustering lesson.
+5. Toggle **row-at-a-time**, rerun Q2, compare wall time.
+6. Open **Bench**. Bars are the checked-in testdata sample (not laptop numbers).
+
+If the header says `offline`, prismd is not up or `NEXT_PUBLIC_API` is wrong.
 
 ---
 
@@ -254,6 +275,8 @@ There is no extra hardware. Climb this ladder and **stop before the machine swap
 | Path too long | Keep the clone near `C:\src\prism`, not a deep OneDrive path |
 | OneDrive locking parquet files | Clone outside OneDrive/Documents if files go “online-only” |
 | `unknown column` | `inspect` prints the schema; names are case-sensitive |
+| Workbench `offline` | Start `prismd` first; header should show `prismd 0.8.0` |
+| `npm` not found | `winget install OpenJS.NodeJS.LTS`, new terminal |
 
 ---
 
