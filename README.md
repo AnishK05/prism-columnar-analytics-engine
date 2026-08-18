@@ -2,7 +2,7 @@
 
 A miniature **vectorized, single-node OLAP engine** for learning how analytical databases actually work: Parquet on disk, Apache Arrow in memory, predicate pushdown, column pruning, row-group skipping, and a batched execution pipeline.
 
-**Windows is the supported local setup.** Follow **[docs/WINDOWS.md](docs/WINDOWS.md)** (native PowerShell + Docker Desktop; WSL is optional).
+**Windows is the supported local setup.** Start with **[WINDOWS.md](WINDOWS.md)** (install → workbench demo). The full developer runbook is **[docs/WINDOWS.md](docs/WINDOWS.md)**.
 
 Blueprint: **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)** (decisions locked in §20).  
 How a query runs: **[docs/architecture.md](docs/architecture.md)**.  

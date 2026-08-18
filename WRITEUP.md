@@ -118,6 +118,7 @@ Resume bullet uses **Q[TODO]** at **[TODO] rows**, **vectorized+optimizations vs
 
 - Plan: `IMPLEMENTATION_PLAN.md`
 - Architecture: `docs/architecture.md`
-- Windows runbook: `docs/WINDOWS.md`
+- Windows start-here: `WINDOWS.md`
+- Windows developer runbook: `docs/WINDOWS.md`
 - API: `docs/api.md`
 - Bench notes: `docs/benchmarks.md`

@@ -1,8 +1,8 @@
 # Running Prism on Windows
 
-This is the **canonical local setup** for Prism. The engine is meant to be developed and demoed on a personal Windows laptop — not a Linux server and not WSL.
+**First time on this laptop?** Use the short path: **[WINDOWS.md](../WINDOWS.md)** at the repo root (install tools, start `prismd` + the workbench, run Q2, see 3 of 4 row groups skipped).
 
-Native PowerShell + Docker Desktop is first-class. WSL2 is optional.
+This page is the **full developer runbook**: CLI catalog, generator, Postgres oracle, bench commands, and WSL notes. Native PowerShell + Docker Desktop is first-class. WSL2 is optional.
 
 > **Status (Phase 0–14):** CLI, `prismd`, and the three-page Next.js workbench are in. Dual engine, `--jobs`, Postgres oracle, and the hot-cache bench harness are on. Resume timings stay placeholders until you run `--scale laptop` on this machine.
 
